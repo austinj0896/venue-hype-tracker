@@ -378,7 +378,7 @@ def inject_styles() -> None:
     }})();
     </script>"""
     if hasattr(st, "html"):
-        st.html(script, height=0)
+        st.html(script)
     else:
         components.html(script, height=0, width=0)
 
