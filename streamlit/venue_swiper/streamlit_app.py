@@ -1,5 +1,5 @@
 """
-Manhattan Beach Venue Swiper
+Venue Swiper — discover and rate food & drink spots by neighborhood.
 
 Runs in Streamlit in Snowflake (SiS) or Streamlit Community Cloud.
 - SiS: Snowflake login + in-app email for personal ratings.
@@ -19,7 +19,11 @@ DEFAULT_BOROUGH = "Manhattan Beach"
 DEFAULT_DIM_PLACES = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"
 DEFAULT_RATINGS_TABLE = "VENUE_HYPE.APP.VENUE_RATINGS"
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
-SESSION_VENUE_KEY = "discover_venue"
+DISCOVER_BOROUGH_KEY = "discover_borough"
+
+
+def discover_venue_key(borough: str) -> str:
+    return f"discover_venue_{borough}"
 
 
 def dim_places_table() -> str:
@@ -597,6 +601,7 @@ def _create_snowflake_session():
 
 def clear_snowflake_caches() -> None:
     fetch_stats.clear()
+    fetch_boroughs.clear()
     fetch_next_venue.clear()
     fetch_user_ratings.clear()
     st.session_state.pop("snowflake_session", None)
@@ -657,19 +662,40 @@ def venue_type_filter_sql(alias: str = "d") -> tuple[str, list[str]]:
     return f"and {alias}.primary_type in ({placeholders})", list(ALLOWED_PRIMARY_TYPES)
 
 
-def clear_discover_venue() -> None:
-    st.session_state.pop(SESSION_VENUE_KEY, None)
+def clear_discover_venue(borough: str | None = None) -> None:
+    if borough:
+        st.session_state.pop(discover_venue_key(borough), None)
+    else:
+        for key in list(st.session_state.keys()):
+            if isinstance(key, str) and key.startswith("discover_venue_"):
+                st.session_state.pop(key, None)
     fetch_next_venue.clear()
 
 
 def get_discover_venue(email: str, borough: str) -> dict[str, Any] | None:
     """Pin the current card in session so slider moves don't re-roll random()."""
-    if SESSION_VENUE_KEY in st.session_state:
-        return st.session_state[SESSION_VENUE_KEY]
+    key = discover_venue_key(borough)
+    if key in st.session_state:
+        return st.session_state[key]
     venue = fetch_next_venue(email, borough)
     if venue:
-        st.session_state[SESSION_VENUE_KEY] = venue
+        st.session_state[key] = venue
     return venue
+
+
+@st.cache_data(show_spinner=False)
+def fetch_boroughs() -> list[str]:
+    type_filter, type_params = venue_type_filter_sql("d")
+    sql = f"""
+        select distinct d.borough as borough
+        from {dim_places_table()} d
+        where d.borough is not null
+          and trim(d.borough) != ''
+          {type_filter}
+        order by d.borough
+    """
+    rows = run_query(sql, type_params)
+    return [str(row["BOROUGH"]) for row in rows if row.get("BOROUGH")]
 
 
 @st.cache_data(show_spinner=False)
@@ -731,9 +757,9 @@ def fetch_next_venue(email: str, borough: str) -> dict[str, Any] | None:
 
 
 @st.cache_data(show_spinner=False)
-def fetch_user_ratings(email: str, borough: str, status: str | None = None) -> list[dict[str, Any]]:
+def fetch_user_ratings(email: str, status: str | None = None) -> list[dict[str, Any]]:
     status_filter = ""
-    params: list[Any] = [email, borough]
+    params: list[Any] = [email]
     if status:
         status_filter = "and r.status = ?"
         params.append(status)
@@ -742,6 +768,7 @@ def fetch_user_ratings(email: str, borough: str, status: str | None = None) -> l
         select
             r.place_name,
             r.google_place_id,
+            r.borough,
             r.rating,
             r.status,
             r.updated_at,
@@ -752,7 +779,6 @@ def fetch_user_ratings(email: str, borough: str, status: str | None = None) -> l
         left join {dim_places_table()} d
             on d.google_place_id = r.google_place_id
         where r.user_email = ?
-          and r.borough = ?
           {status_filter}
         order by r.updated_at desc
     """
@@ -855,7 +881,7 @@ def save_rating(
 def render_login() -> None:
     render_vesper_header("Rate the coast.")
     st.markdown(
-        '<p class="vesper-sub">Manhattan Beach &middot; venue ratings</p>',
+        '<p class="vesper-sub">venue ratings &middot; pick a neighborhood in Discover</p>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -920,7 +946,26 @@ def render_venue_card(venue: dict[str, Any]) -> None:
     )
 
 
-def render_discover(email: str, borough: str) -> None:
+def render_discover(email: str) -> None:
+    try:
+        boroughs = fetch_boroughs()
+    except Exception as exc:
+        show_snowflake_data_error(exc)
+        return
+
+    if not boroughs:
+        st.warning("No discoverable locations in the venue catalog yet.")
+        return
+
+    if DISCOVER_BOROUGH_KEY not in st.session_state:
+        st.session_state[DISCOVER_BOROUGH_KEY] = (
+            DEFAULT_BOROUGH if DEFAULT_BOROUGH in boroughs else boroughs[0]
+        )
+    if st.session_state[DISCOVER_BOROUGH_KEY] not in boroughs:
+        st.session_state[DISCOVER_BOROUGH_KEY] = boroughs[0]
+
+    borough = st.selectbox("Location", boroughs, key=DISCOVER_BOROUGH_KEY)
+
     try:
         stats = fetch_stats(email, borough)
     except Exception as exc:
@@ -933,11 +978,11 @@ def render_discover(email: str, borough: str) -> None:
     venue = get_discover_venue(email, borough)
     if not venue:
         st.markdown(
-            """
+            f"""
             <div class="login-panel">
-                <p>You're caught up - no unrated venues left in Manhattan Beach.
-                Check <strong>My ratings</strong> or revisit <strong>Skipped</strong>
-                when you've visited somewhere new.</p>
+                <p>You're caught up - no unrated venues left in <strong>{borough}</strong>.
+                Pick another location above, or check <strong>My ratings</strong> /
+                <strong>Skipped</strong> for places you've already seen.</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1008,9 +1053,9 @@ def verify_data_access() -> bool:
         return False
 
 
-def render_rated_list(email: str, borough: str) -> None:
+def render_rated_list(email: str) -> None:
     try:
-        rows = fetch_user_ratings(email, borough, status="rated")
+        rows = fetch_user_ratings(email, status="rated")
     except Exception as exc:
         show_snowflake_data_error(exc)
         return
@@ -1030,17 +1075,20 @@ def render_rated_list(email: str, borough: str) -> None:
     for row in rows:
         category = (row.get("VENUE_CATEGORY") or row.get("PRIMARY_TYPE") or "").replace("_", " ")
         address = row.get("FORMATTED_ADDRESS") or ""
+        location = row.get("BOROUGH") or ""
         place_id = row["GOOGLE_PLACE_ID"]
         rating_key = f"edit_rate_{place_id}"
         current_rating = float(row["RATING"])
         if rating_key not in st.session_state:
             st.session_state[rating_key] = current_rating
 
+        meta = " &middot; ".join(p for p in [location, category, address] if p)
+
         st.markdown(
             f"""
             <div class="bucket-card">
                 <div class="bucket-title">{row['PLACE_NAME']}</div>
-                <div class="bucket-sub">{category} &middot; {address}</div>
+                <div class="bucket-sub">{meta}</div>
                 <div class="bucket-score">
                     <span class="bucket-score-num">{current_rating:.1f}</span>
                     <span>{stars_text(current_rating)} saved</span>
@@ -1066,7 +1114,7 @@ def render_rated_list(email: str, borough: str) -> None:
             updated = float(st.session_state[rating_key])
             save_rating(
                 email=email,
-                borough=borough,
+                borough=row.get("BOROUGH") or DEFAULT_BOROUGH,
                 google_place_id=place_id,
                 place_name=row["PLACE_NAME"] or "Unknown venue",
                 status="rated",
@@ -1076,9 +1124,9 @@ def render_rated_list(email: str, borough: str) -> None:
             st.rerun()
 
 
-def render_skipped_list(email: str, borough: str) -> None:
+def render_skipped_list(email: str) -> None:
     try:
-        rows = fetch_user_ratings(email, borough, status="skipped")
+        rows = fetch_user_ratings(email, status="skipped")
     except Exception as exc:
         show_snowflake_data_error(exc)
         return
@@ -1097,17 +1145,20 @@ def render_skipped_list(email: str, borough: str) -> None:
 
     for row in rows:
         address = row.get("FORMATTED_ADDRESS") or ""
+        location = row.get("BOROUGH") or ""
         place_id = row["GOOGLE_PLACE_ID"]
         rating_key = f"skip_rate_{place_id}"
         if rating_key not in st.session_state:
             st.session_state[rating_key] = 3.0
+
+        meta = " &middot; ".join(p for p in [location, address] if p)
 
         st.markdown(
             f"""
             <div class="bucket-card">
                 <div class="bucket-icon-skip">&rarr;</div>
                 <div class="bucket-title">{row['PLACE_NAME']}</div>
-                <div class="bucket-sub">{address}</div>
+                <div class="bucket-sub">{meta}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1128,7 +1179,7 @@ def render_skipped_list(email: str, borough: str) -> None:
         if st.button("Save rating", key=f"save_{place_id}", type="primary", use_container_width=True):
             save_rating(
                 email=email,
-                borough=borough,
+                borough=row.get("BOROUGH") or DEFAULT_BOROUGH,
                 google_place_id=place_id,
                 place_name=row["PLACE_NAME"] or "Unknown venue",
                 status="rated",
@@ -1146,12 +1197,11 @@ def main() -> None:
         return
 
     email = st.session_state["user_email"]
-    borough = DEFAULT_BOROUGH
     display_name = email.split("@")[0].replace(".", " ").title()
 
     render_vesper_header(f"Good evening, {display_name}.")
     st.markdown(
-        f'<p class="vesper-sub">{borough} &middot; signed in as {email}</p>',
+        f'<p class="vesper-sub">signed in as {email}</p>',
         unsafe_allow_html=True,
     )
 
@@ -1168,13 +1218,13 @@ def main() -> None:
     tab_discover, tab_rated, tab_skipped = st.tabs(["Discover", "My ratings", "Skipped"])
 
     with tab_discover:
-        render_discover(email, borough)
+        render_discover(email)
 
     with tab_rated:
-        render_rated_list(email, borough)
+        render_rated_list(email)
 
     with tab_skipped:
-        render_skipped_list(email, borough)
+        render_skipped_list(email)
 
 
 if __name__ == "__main__":
