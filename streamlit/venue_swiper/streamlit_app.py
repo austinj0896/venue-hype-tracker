@@ -403,6 +403,7 @@ def fetch_snowflake_identity() -> dict[str, str] | None:
 def show_snowflake_data_error(exc: Exception) -> None:
     st.error("Cannot read venue data from Snowflake.")
     st.markdown(f"**Details:** `{exc}`")
+    st.markdown(f"**Table the app is querying:** `{dim_places_table()}`")
 
     identity = fetch_snowflake_identity()
     if identity:
@@ -411,47 +412,37 @@ def show_snowflake_data_error(exc: Exception) -> None:
             "\n".join(f"{key}: {value}" for key, value in identity.items()),
             language="text",
         )
-        expected_user = "VENUE_SWIPER_SVC"
-        expected_role = "VENUE_SWIPER_APP"
-        if identity.get("snowflake_user", "").upper() != expected_user:
-            st.warning(
-                f"Secrets `user` should be `{expected_user}`, not your personal login. "
-                "Update App Settings → Secrets, then **Reboot app** (⋮ menu)."
-            )
-        if identity.get("snowflake_role", "").upper() != expected_role:
-            st.warning(
-                f"Secrets `role` should be `{expected_role}`. "
-                "Worksheets with `USE ROLE` as your admin user do not prove the service account is configured."
-            )
+
+    try:
+        count_row = run_query(
+            f"""
+            select count(*) as venue_count
+            from {dim_places_table()}
+            where borough = ?
+            """,
+            [DEFAULT_BOROUGH],
+        )[0]
+        venue_count = count_row.get("VENUE_COUNT") or count_row.get("venue_count")
+        st.success(f"Live probe from this session: **{venue_count}** venues in {DEFAULT_BOROUGH}.")
+        st.info("Snowflake access works — click **Retry** below to clear cached query results.")
+    except Exception as probe_exc:
+        st.markdown(f"**Live probe failed:** `{probe_exc}`")
+
+    if st.button("Retry Snowflake connection", type="primary"):
+        clear_snowflake_caches()
+        st.rerun()
 
     st.markdown(
         f"""
-        **Why Step C can pass but the app fails**
+        **If snowsql returns 86 but the probe above fails**
 
-        Snowsight Step C runs as **your personal user** after `USE ROLE VENUE_SWIPER_APP`.
-        Streamlit Cloud connects as **`VENUE_SWIPER_SVC`** using App Secrets. Those are different logins.
+        1. Check Streamlit **Settings → Secrets** for an `[app]` block. If present, either remove it
+           or set `dim_places = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"` (not `MARTS`).
+        2. Confirm snowsql uses the **service user**, not `USE ROLE` from your admin login:
+           `snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH`
+        3. After grant changes: **Reboot app** (⋮ menu), then **Retry** above.
 
-        **Test the service user (not `USE ROLE` from admin):**
-
-        ```sql
-        -- snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH
-        SELECT CURRENT_USER(), CURRENT_ROLE();
-        SELECT COUNT(*) FROM {dim_places_table()} WHERE borough = 'Manhattan Beach';
-        ```
-
-        **Secrets must look like this (Settings → Secrets):**
-
-        ```toml
-        [connections.snowflake]
-        user = "VENUE_SWIPER_SVC"
-        role = "VENUE_SWIPER_APP"
-        database = "VENUE_HYPE"
-        schema = "APP"
-        ```
-
-        After changing secrets: **Reboot app** in Streamlit Cloud (cached Snowflake session).
-
-        **If identity above is correct but count still fails — grants (ACCOUNTADMIN):**
+        **Grants (ACCOUNTADMIN) — run for the exact table path shown above:**
 
         ```sql
         GRANT USAGE ON DATABASE VENUE_HYPE TO ROLE VENUE_SWIPER_APP;
@@ -524,7 +515,30 @@ def _activate_snowflake_role(session, role: str) -> None:
     session.sql(f'USE ROLE "{safe_role}"').collect()
 
 
-@st.cache_resource
+def _configure_snowflake_session(session, params: dict[str, str]) -> None:
+    _activate_snowflake_role(session, params["role"])
+    safe_db = params["database"].replace('"', '""')
+    safe_schema = params["schema"].replace('"', '""')
+    session.sql(f'USE DATABASE "{safe_db}"').collect()
+    session.sql(f'USE SCHEMA "{safe_schema}"').collect()
+
+
+def _create_snowflake_session():
+    from snowflake.snowpark import Session
+
+    params = _snowflake_connection_params()
+    session = Session.builder.configs(params).create()
+    _configure_snowflake_session(session, params)
+    return session
+
+
+def clear_snowflake_caches() -> None:
+    fetch_stats.clear()
+    fetch_next_venue.clear()
+    fetch_user_ratings.clear()
+    st.session_state.pop("snowflake_session", None)
+
+
 def get_session():
     try:
         from snowflake.snowpark.context import get_active_session
@@ -533,69 +547,20 @@ def get_session():
     except Exception:
         pass
 
-    errors: list[str] = []
-
-    # Prefer explicit Session.builder on Community Cloud — role from secrets is applied reliably.
-    try:
-        if "connections" in st.secrets and "snowflake" in st.secrets.connections:
-            from snowflake.snowpark import Session
-
-            params = _snowflake_connection_params()
-            session = Session.builder.configs(params).create()
-            _activate_snowflake_role(session, params["role"])
-            return session
-    except Exception as exc:
-        errors.append(f"Session.builder: {exc}")
-
-    try:
-        session = st.connection("snowflake").session()
-        if "connections" in st.secrets and "snowflake" in st.secrets.connections:
-            role = str(st.secrets.connections.snowflake.get("role", "")).strip()
-            if role:
-                _activate_snowflake_role(session, role)
-        return session
-    except Exception as exc:
-        errors.append(f"st.connection: {exc}")
-
-    try:
-        from snowflake.snowpark import Session
-
-        params = _snowflake_connection_params()
-        session = Session.builder.configs(params).create()
-        _activate_snowflake_role(session, params["role"])
-        return session
-    except Exception as exc:
-        errors.append(f"Session.builder (retry): {exc}")
-
-    st.error("Could not connect to Snowflake.")
-    with st.expander("Connection details (for troubleshooting)"):
-        st.markdown(
-            """
-            **Check App Secrets (Settings -> Secrets):**
-
-            ```toml
-            [connections.snowflake]
-            account = "YOUR_ACCOUNT"
-            user = "VENUE_SWIPER_SVC"
-            password = "YOUR_PASSWORD"
-            role = "VENUE_SWIPER_APP"
-            warehouse = "VENUE_HYPE_WH"
-            database = "VENUE_HYPE"
-            schema = "APP"
-            ```
-
-            **Account value:** use the same identifier as `SNOWFLAKE_ACCOUNT` in your
-            local `.env` (e.g. `xy12345.us-east-1`). If that fails, try the
-            org-account form from Snowsight -> Account -> Account identifier
-            (e.g. `MYORG-MYACCOUNT`).
-
-            **Password:** use the `VENUE_SWIPER_SVC` password, not your personal login.
-            Wrap passwords with special characters in double quotes in Secrets.
-            """
-        )
-        for message in errors:
-            st.code(message)
-    st.stop()
+    if "snowflake_session" not in st.session_state:
+        try:
+            st.session_state.snowflake_session = _create_snowflake_session()
+        except Exception as exc:
+            st.error("Could not connect to Snowflake.")
+            st.markdown(
+                """
+                Check **App Settings → Secrets** for `[connections.snowflake]` with
+                `user`, `password`, `role`, `account`, `warehouse`, `database`, and `schema`.
+                """
+            )
+            st.code(str(exc))
+            st.stop()
+    return st.session_state.snowflake_session
 
 
 def normalize_email(raw: str) -> str:
