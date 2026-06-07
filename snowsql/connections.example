@@ -1,0 +1,15 @@
+# Copy the [connections.venue_hype] block into your SnowSQL config file:
+#   Windows: %USERPROFILE%\.snowsql\config
+#   macOS/Linux: ~/.snowsql/config
+#
+# Then run from venue_hype_tracker:
+#   snowsql -c venue_hype -f snowflake/setup.sql
+
+[connections.venue_hype]
+accountname = YOUR_ACCOUNT_IDENTIFIER
+username = YOUR_USER
+password = YOUR_PASSWORD
+rolename = YOUR_ROLE
+warehousename = YOUR_WAREHOUSE
+dbname = VENUE_HYPE
+schemaname = RAW

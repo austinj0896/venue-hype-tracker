@@ -1,0 +1,42 @@
+name: venue_hype
+version: 1.0.0
+config-version: 2
+
+profile: venue_hype
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - target
+  - dbt_packages
+
+models:
+  venue_hype:
+    staging:
+      +schema: STAGING
+      +materialized: view
+    marts:
+      +schema: MARTS
+      +materialized: table
+
+snapshots:
+  venue_hype:
+    +target_schema: SNAPSHOTS
+
+vars:
+  venue_hype_database: VENUE_HYPE
+  venue_hype_raw_schema: RAW
+  # assert_pilot_bbox — set to match your latest fetch preset:
+  # Kips Bay:       40.736 / 40.749 / -73.985 / -73.965
+  # Murray Hill:    40.747 / 40.757 / -73.988 / -73.962
+  # Manhattan Beach: 33.874 / 33.900 / -118.422 / -118.400
+  pilot_bbox_south: 33.874
+  pilot_bbox_north: 33.900
+  pilot_bbox_west: -118.422
+  pilot_bbox_east: -118.400
+  pilot_area_name: Manhattan Beach

@@ -1,0 +1,17 @@
+# Copy to ~/.dbt/profiles.yml (or merge this profile into your existing file).
+# dbt reads credentials from environment variables loaded in your shell or .env.
+
+venue_hype:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'ACCOUNTADMIN') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'VENUE_HYPE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
+      schema: STAGING
+      threads: 4
+      client_session_keep_alive: false

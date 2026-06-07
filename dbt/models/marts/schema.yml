@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: dim_places
+    description: Venue dimension for hype analytics (Kips Bay pilot and beyond).
+    columns:
+      - name: google_place_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('stg_places')
+                field: google_place_id
+      - name: place_name
+        tests:
+          - not_null
+      - name: primary_type
+      - name: rating
+      - name: user_rating_count
+      - name: latitude
+        tests:
+          - not_null
+      - name: longitude
+        tests:
+          - not_null
+      - name: venue_category
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['nightlife', 'food_drink', 'events', 'other']
+      - name: last_seen_at
+        tests:
+          - not_null

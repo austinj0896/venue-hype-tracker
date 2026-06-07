@@ -1,0 +1,14 @@
+definition_version: 2
+entities:
+  venue_swiper:
+    type: streamlit
+    identifier:
+      database: VENUE_HYPE
+      schema: APP
+      name: VENUE_SWIPER
+    query_warehouse: VENUE_HYPE_WH
+    main_file: streamlit_app.py
+    artifacts:
+      - streamlit_app.py
+      - environment.yml
+      - .streamlit/config.toml

@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: stg_places
+    description: Cleaned Google Places records from RAW.PLACES.
+    columns:
+      - name: google_place_id
+        tests:
+          - not_null
+          - unique
+      - name: place_name
+      - name: primary_type
+      - name: last_seen_at

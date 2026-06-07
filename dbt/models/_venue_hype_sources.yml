@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: venue_hype_raw
+    database: "{{ var('venue_hype_database') }}"
+    schema: "{{ var('venue_hype_raw_schema') }}"
+    tables:
+      - name: places
+        description: Google Places Nearby Search landing table (Python ETL).
+        loaded_at_field: loaded_at
+        freshness:
+          warn_after: {count: 7, period: day}
+          error_after: {count: 30, period: day}
+        columns:
+          - name: google_place_id
+            description: Stable Google place identifier.
+            tests:
+              - not_null
+              - unique
+          - name: name
+          - name: primary_type
+          - name: rating
+          - name: user_rating_count
+          - name: last_seen_at
+          - name: loaded_at

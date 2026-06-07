@@ -1,0 +1,55 @@
+-- Venue Hype Tracker — Snowflake bootstrap
+-- Run with snowsql, e.g.:
+--   snowsql -c venue_hype -f snowflake/setup.sql
+--
+-- Edit warehouse name below if needed (must exist and be usable by your role).
+
+-- Uses warehouse from your snowsql connection (warehousename in config).
+
+CREATE DATABASE IF NOT EXISTS VENUE_HYPE;
+CREATE SCHEMA IF NOT EXISTS VENUE_HYPE.RAW;
+CREATE SCHEMA IF NOT EXISTS VENUE_HYPE.STAGING;
+CREATE SCHEMA IF NOT EXISTS VENUE_HYPE.MARTS;
+CREATE SCHEMA IF NOT EXISTS VENUE_HYPE.SNAPSHOTS;
+
+USE DATABASE VENUE_HYPE;
+USE SCHEMA RAW;
+
+CREATE TABLE IF NOT EXISTS PLACES (
+    PLACE_KEY            NUMBER AUTOINCREMENT START 1 INCREMENT 1,
+    GOOGLE_PLACE_ID      VARCHAR NOT NULL,
+    NAME                 VARCHAR,
+    FORMATTED_ADDRESS    VARCHAR,
+    SHORT_FORMATTED_ADDRESS VARCHAR,
+    LATITUDE             FLOAT,
+    LONGITUDE            FLOAT,
+    PRIMARY_TYPE         VARCHAR,
+    TYPES                VARIANT,
+    BUSINESS_STATUS      VARCHAR,
+    RATING               FLOAT,
+    USER_RATING_COUNT    NUMBER,
+    PRICE_LEVEL          VARCHAR,
+    WEBSITE_URI          VARCHAR,
+    BOROUGH              VARCHAR DEFAULT 'Manhattan',
+    SOURCE               VARCHAR DEFAULT 'google_places_nearby',
+    FIRST_SEEN_AT        TIMESTAMP_NTZ NOT NULL,
+    LAST_SEEN_AT         TIMESTAMP_NTZ NOT NULL,
+    LOADED_AT            TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT UQ_PLACES_GOOGLE_PLACE_ID UNIQUE (GOOGLE_PLACE_ID)
+);
+
+CREATE TABLE IF NOT EXISTS FETCH_RUNS (
+    RUN_KEY              NUMBER AUTOINCREMENT START 1 INCREMENT 1,
+    STARTED_AT           TIMESTAMP_NTZ NOT NULL,
+    FINISHED_AT          TIMESTAMP_NTZ,
+    SOURCE               VARCHAR NOT NULL,
+    GRID_ROWS            NUMBER,
+    GRID_COLS            NUMBER,
+    SEARCH_RADIUS_M      FLOAT,
+    TYPES_REQUESTED      VARCHAR,
+    API_CALLS            NUMBER DEFAULT 0,
+    PLACES_UPSERTED      NUMBER DEFAULT 0,
+    ERROR_MESSAGE        VARCHAR
+);
+
+SELECT 'VENUE_HYPE bootstrap complete' AS STATUS;
