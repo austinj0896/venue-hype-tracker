@@ -970,8 +970,22 @@ def render_discover(email: str, borough: str) -> None:
             st.rerun()
 
 
+def verify_data_access() -> bool:
+    """One lightweight read before rendering tabs."""
+    try:
+        run_query(f"select 1 from {dim_places_table()} limit 1")
+        return True
+    except Exception as exc:
+        show_snowflake_data_error(exc)
+        return False
+
+
 def render_rated_list(email: str, borough: str) -> None:
-    rows = fetch_user_ratings(email, borough, status="rated")
+    try:
+        rows = fetch_user_ratings(email, borough, status="rated")
+    except Exception as exc:
+        show_snowflake_data_error(exc)
+        return
     st.markdown('<div class="section-label">Your ratings</div>', unsafe_allow_html=True)
     if not rows:
         st.markdown(
@@ -1035,7 +1049,11 @@ def render_rated_list(email: str, borough: str) -> None:
 
 
 def render_skipped_list(email: str, borough: str) -> None:
-    rows = fetch_user_ratings(email, borough, status="skipped")
+    try:
+        rows = fetch_user_ratings(email, borough, status="skipped")
+    except Exception as exc:
+        show_snowflake_data_error(exc)
+        return
     st.markdown('<div class="section-label">Skipped &middot; not visited yet</div>', unsafe_allow_html=True)
     if not rows:
         st.markdown(
@@ -1115,6 +1133,9 @@ def main() -> None:
             clear_discover_venue()
             del st.session_state["user_email"]
             st.rerun()
+
+    if not verify_data_access():
+        return
 
     tab_discover, tab_rated, tab_skipped = st.tabs(["Discover", "My ratings", "Skipped"])
 
