@@ -16,10 +16,24 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 DEFAULT_BOROUGH = "Manhattan Beach"
-DIM_PLACES = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"
-RATINGS_TABLE = "VENUE_HYPE.APP.VENUE_RATINGS"
+DEFAULT_DIM_PLACES = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"
+DEFAULT_RATINGS_TABLE = "VENUE_HYPE.APP.VENUE_RATINGS"
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 SESSION_VENUE_KEY = "discover_venue"
+
+
+def dim_places_table() -> str:
+    try:
+        return st.secrets.get("app", {}).get("dim_places", DEFAULT_DIM_PLACES)
+    except Exception:
+        return DEFAULT_DIM_PLACES
+
+
+def ratings_table() -> str:
+    try:
+        return st.secrets.get("app", {}).get("ratings_table", DEFAULT_RATINGS_TABLE)
+    except Exception:
+        return DEFAULT_RATINGS_TABLE
 
 # Food, drink, bars, clubs — excludes hotels, orgs, courts, schools, etc.
 ALLOWED_PRIMARY_TYPES = (
@@ -352,21 +366,101 @@ st.set_page_config(
 
 
 def inject_styles() -> None:
-    # SiS strips <style> in st.markdown; inject into the parent page via iframe script.
     css_literal = json.dumps(VESPER_CSS)
-    components.html(
-        f"""<script>
-        (function() {{
-            const doc = window.parent.document;
-            if (doc.getElementById("vesper-styles")) return;
-            const el = doc.createElement("style");
-            el.id = "vesper-styles";
-            el.textContent = {css_literal};
-            doc.head.appendChild(el);
-        }})();
-        </script>""",
-        height=0,
-        width=0,
+    script = f"""<script>
+    (function() {{
+        const doc = window.parent.document;
+        if (doc.getElementById("vesper-styles")) return;
+        const el = doc.createElement("style");
+        el.id = "vesper-styles";
+        el.textContent = {css_literal};
+        doc.head.appendChild(el);
+    }})();
+    </script>"""
+    if hasattr(st, "html"):
+        st.html(script, height=0)
+    else:
+        components.html(script, height=0, width=0)
+
+
+def fetch_snowflake_identity() -> dict[str, str] | None:
+    """What user/role the app session is actually using (not your Snowsight worksheet)."""
+    try:
+        row = run_query(
+            """
+            select
+                current_user() as snowflake_user,
+                current_role() as snowflake_role,
+                current_database() as snowflake_database,
+                current_warehouse() as snowflake_warehouse
+            """
+        )[0]
+        return {k.lower(): str(v) for k, v in row.items()}
+    except Exception:
+        return None
+
+
+def show_snowflake_data_error(exc: Exception) -> None:
+    st.error("Cannot read venue data from Snowflake.")
+    st.markdown(f"**Details:** `{exc}`")
+
+    identity = fetch_snowflake_identity()
+    if identity:
+        st.markdown("**App session (from Streamlit Cloud secrets):**")
+        st.code(
+            "\n".join(f"{key}: {value}" for key, value in identity.items()),
+            language="text",
+        )
+        expected_user = "VENUE_SWIPER_SVC"
+        expected_role = "VENUE_SWIPER_APP"
+        if identity.get("snowflake_user", "").upper() != expected_user:
+            st.warning(
+                f"Secrets `user` should be `{expected_user}`, not your personal login. "
+                "Update App Settings → Secrets, then **Reboot app** (⋮ menu)."
+            )
+        if identity.get("snowflake_role", "").upper() != expected_role:
+            st.warning(
+                f"Secrets `role` should be `{expected_role}`. "
+                "Worksheets with `USE ROLE` as your admin user do not prove the service account is configured."
+            )
+
+    st.markdown(
+        f"""
+        **Why Step C can pass but the app fails**
+
+        Snowsight Step C runs as **your personal user** after `USE ROLE VENUE_SWIPER_APP`.
+        Streamlit Cloud connects as **`VENUE_SWIPER_SVC`** using App Secrets. Those are different logins.
+
+        **Test the service user (not `USE ROLE` from admin):**
+
+        ```sql
+        -- snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH
+        SELECT CURRENT_USER(), CURRENT_ROLE();
+        SELECT COUNT(*) FROM {dim_places_table()} WHERE borough = 'Manhattan Beach';
+        ```
+
+        **Secrets must look like this (Settings → Secrets):**
+
+        ```toml
+        [connections.snowflake]
+        user = "VENUE_SWIPER_SVC"
+        role = "VENUE_SWIPER_APP"
+        database = "VENUE_HYPE"
+        schema = "APP"
+        ```
+
+        After changing secrets: **Reboot app** in Streamlit Cloud (cached Snowflake session).
+
+        **If identity above is correct but count still fails — grants (ACCOUNTADMIN):**
+
+        ```sql
+        GRANT USAGE ON DATABASE VENUE_HYPE TO ROLE VENUE_SWIPER_APP;
+        GRANT USAGE ON SCHEMA VENUE_HYPE.STAGING_MARTS TO ROLE VENUE_SWIPER_APP;
+        GRANT SELECT ON TABLE {dim_places_table()} TO ROLE VENUE_SWIPER_APP;
+        GRANT USAGE ON SCHEMA VENUE_HYPE.APP TO ROLE VENUE_SWIPER_APP;
+        GRANT SELECT, INSERT, UPDATE ON TABLE {ratings_table()} TO ROLE VENUE_SWIPER_APP;
+        ```
+        """
     )
 
 
@@ -424,6 +518,12 @@ def _snowflake_connection_params() -> dict[str, str]:
     return params
 
 
+def _activate_snowflake_role(session, role: str) -> None:
+    """Ensure the session uses the role from secrets (st.connection can leave a stale default)."""
+    safe_role = role.replace('"', '""')
+    session.sql(f'USE ROLE "{safe_role}"').collect()
+
+
 @st.cache_resource
 def get_session():
     try:
@@ -435,17 +535,37 @@ def get_session():
 
     errors: list[str] = []
 
+    # Prefer explicit Session.builder on Community Cloud — role from secrets is applied reliably.
     try:
-        return st.connection("snowflake").session()
+        if "connections" in st.secrets and "snowflake" in st.secrets.connections:
+            from snowflake.snowpark import Session
+
+            params = _snowflake_connection_params()
+            session = Session.builder.configs(params).create()
+            _activate_snowflake_role(session, params["role"])
+            return session
+    except Exception as exc:
+        errors.append(f"Session.builder: {exc}")
+
+    try:
+        session = st.connection("snowflake").session()
+        if "connections" in st.secrets and "snowflake" in st.secrets.connections:
+            role = str(st.secrets.connections.snowflake.get("role", "")).strip()
+            if role:
+                _activate_snowflake_role(session, role)
+        return session
     except Exception as exc:
         errors.append(f"st.connection: {exc}")
 
     try:
         from snowflake.snowpark import Session
 
-        return Session.builder.configs(_snowflake_connection_params()).create()
+        params = _snowflake_connection_params()
+        session = Session.builder.configs(params).create()
+        _activate_snowflake_role(session, params["role"])
+        return session
     except Exception as exc:
-        errors.append(f"Session.builder: {exc}")
+        errors.append(f"Session.builder (retry): {exc}")
 
     st.error("Could not connect to Snowflake.")
     with st.expander("Connection details (for troubleshooting)"):
@@ -497,7 +617,10 @@ def stars_text(value: float | None) -> str:
 
 def run_query(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
     session = get_session()
-    rows = session.sql(sql, params=params or []).collect()
+    try:
+        rows = session.sql(sql, params=params or []).collect()
+    except Exception as exc:
+        raise RuntimeError(f"Snowflake query failed: {exc}") from exc
     return [row.as_dict() for row in rows]
 
 
@@ -530,8 +653,8 @@ def fetch_stats(email: str, borough: str) -> dict[str, int]:
             count(r.rating_id) as reviewed,
             count_if(r.status = 'rated') as rated,
             count_if(r.status = 'skipped') as skipped
-        from {DIM_PLACES} d
-        left join {RATINGS_TABLE} r
+        from {dim_places_table()} d
+        left join {ratings_table()} r
             on r.google_place_id = d.google_place_id
             and r.user_email = ?
             and r.borough = ?
@@ -563,12 +686,12 @@ def fetch_next_venue(email: str, borough: str) -> dict[str, Any] | None:
             d.venue_category,
             d.price_level,
             d.website_uri
-        from {DIM_PLACES} d
+        from {dim_places_table()} d
         where d.borough = ?
           {type_filter}
           and not exists (
               select 1
-              from {RATINGS_TABLE} r
+              from {ratings_table()} r
               where r.user_email = ?
                 and r.google_place_id = d.google_place_id
           )
@@ -597,8 +720,8 @@ def fetch_user_ratings(email: str, borough: str, status: str | None = None) -> l
             d.formatted_address,
             d.primary_type,
             d.venue_category
-        from {RATINGS_TABLE} r
-        left join {DIM_PLACES} d
+        from {ratings_table()} r
+        left join {dim_places_table()} d
             on d.google_place_id = r.google_place_id
         where r.user_email = ?
           and r.borough = ?
@@ -620,7 +743,7 @@ def save_rating(
     session = get_session()
     if status == "skipped":
         sql = f"""
-            merge into {RATINGS_TABLE} as target
+            merge into {ratings_table()} as target
             using (
                 select
                     ? as user_email,
@@ -658,7 +781,7 @@ def save_rating(
         if rating is None:
             raise ValueError("Rated rows require a numeric rating.")
         sql = f"""
-            merge into {RATINGS_TABLE} as target
+            merge into {ratings_table()} as target
             using (
                 select
                     ? as user_email,
@@ -770,7 +893,12 @@ def render_venue_card(venue: dict[str, Any]) -> None:
 
 
 def render_discover(email: str, borough: str) -> None:
-    stats = fetch_stats(email, borough)
+    try:
+        stats = fetch_stats(email, borough)
+    except Exception as exc:
+        show_snowflake_data_error(exc)
+        return
+
     st.markdown('<div class="section-label">Discover</div>', unsafe_allow_html=True)
     render_progress(stats)
 
