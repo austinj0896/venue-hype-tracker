@@ -355,6 +355,21 @@ div[data-testid="stFormSubmitButton"] button {{
     font-weight: 500 !important;
     letter-spacing: 0.04em !important;
 }}
+div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(1) {{
+    background: rgba(112,77,59,0.18) !important;
+}}
+div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(2) {{
+    background: var(--gold) !important;
+}}
+div[data-testid="stSlider"] [role="slider"] {{
+    background: var(--brown) !important;
+    border: 2px solid var(--cream) !important;
+    box-shadow: 0 1px 4px rgba(44,26,16,0.25) !important;
+}}
+div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
+    color: var(--brown) !important;
+    font-weight: 600 !important;
+}}
 """
 
 st.set_page_config(
@@ -365,7 +380,17 @@ st.set_page_config(
 )
 
 
+def format_price_level(raw: str | None) -> str:
+    if not raw:
+        return ""
+    text = raw.replace("_", " ").strip().lower()
+    if text.startswith("price level "):
+        text = text[len("price level ") :]
+    return text.title()
+
+
 def inject_styles() -> None:
+    # st.html() on Streamlit Cloud does not run parent-document scripts — use components.html.
     css_literal = json.dumps(VESPER_CSS)
     script = f"""<script>
     (function() {{
@@ -377,20 +402,23 @@ def inject_styles() -> None:
         doc.head.appendChild(el);
     }})();
     </script>"""
-    if hasattr(st, "html"):
-        st.html(script)
-    else:
-        components.html(script, height=0, width=0)
+    components.html(script, height=0, width=0)
+    # Fallback: styles widgets inside the app iframe when parent injection is blocked.
+    st.markdown(f"<style>{VESPER_CSS}</style>", unsafe_allow_html=True)
 
 
 def fetch_snowflake_identity() -> dict[str, str] | None:
-    """What user/role the app session is actually using (not your Snowsight worksheet)."""
+    """What user/role/account the app session is actually using."""
     try:
         row = run_query(
             """
             select
                 current_user() as snowflake_user,
                 current_role() as snowflake_role,
+                current_account() as account_locator,
+                current_organization_name() as org_name,
+                current_account_name() as account_name,
+                current_region() as region,
                 current_database() as snowflake_database,
                 current_warehouse() as snowflake_warehouse
             """
@@ -400,16 +428,46 @@ def fetch_snowflake_identity() -> dict[str, str] | None:
         return None
 
 
+def fetch_secrets_account_hint() -> str | None:
+    try:
+        return str(st.secrets.connections.snowflake.account).strip()
+    except Exception:
+        return None
+
+
 def show_snowflake_data_error(exc: Exception) -> None:
     st.error("Cannot read venue data from Snowflake.")
-    st.markdown(f"**Details:** `{exc}`")
-    st.markdown(f"**Table the app is querying:** `{dim_places_table()}`")
+    st.markdown(
+        """
+        **What this means:** the app logged into Snowflake successfully, but this role
+        cannot read `STAGING_MARTS.DIM_PLACES` in the account Streamlit connected to.
+        """
+    )
+    st.markdown(f"**Error:** `{exc}`")
+    st.markdown(f"**Table queried:** `{dim_places_table()}`")
+
+    secrets_account = fetch_secrets_account_hint()
+    if secrets_account:
+        st.markdown(f"**Account in Streamlit secrets:** `{secrets_account}`")
 
     identity = fetch_snowflake_identity()
     if identity:
-        st.markdown("**App session (from Streamlit Cloud secrets):**")
+        st.markdown("**App session (live from Snowflake):**")
         st.code(
             "\n".join(f"{key}: {value}" for key, value in identity.items()),
+            language="text",
+        )
+        st.markdown(
+            """
+            **Compare with snowsql** — run this and check `account_locator` + `region` match
+            the values above exactly:
+            """
+        )
+        st.code(
+            "snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH\n"
+            "SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_ACCOUNT(), CURRENT_REGION();\n"
+            "SELECT COUNT(*) FROM VENUE_HYPE.STAGING_MARTS.DIM_PLACES "
+            "WHERE borough = 'Manhattan Beach';",
             language="text",
         )
 
@@ -423,10 +481,9 @@ def show_snowflake_data_error(exc: Exception) -> None:
             [DEFAULT_BOROUGH],
         )[0]
         venue_count = count_row.get("VENUE_COUNT") or count_row.get("venue_count")
-        st.success(f"Live probe from this session: **{venue_count}** venues in {DEFAULT_BOROUGH}.")
-        st.info("Snowflake access works — click **Retry** below to clear cached query results.")
+        st.success(f"Live probe: **{venue_count}** venues — access works. Click **Retry**.")
     except Exception as probe_exc:
-        st.markdown(f"**Live probe failed:** `{probe_exc}`")
+        st.markdown(f"**Live probe:** `{probe_exc}`")
 
     if st.button("Retry Snowflake connection", type="primary"):
         clear_snowflake_caches()
@@ -434,23 +491,32 @@ def show_snowflake_data_error(exc: Exception) -> None:
 
     st.markdown(
         f"""
-        **If snowsql returns 86 but the probe above fails**
+        ### Fix checklist
 
-        1. Check Streamlit **Settings → Secrets** for an `[app]` block. If present, either remove it
-           or set `dim_places = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"` (not `MARTS`).
-        2. Confirm snowsql uses the **service user**, not `USE ROLE` from your admin login:
-           `snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH`
-        3. After grant changes: **Reboot app** (⋮ menu), then **Retry** above.
+        **1. Same account?**  
+        If snowsql `CURRENT_ACCOUNT()` / `CURRENT_REGION()` differ from the app session above,
+        fix the `account` value in Streamlit **Settings → Secrets** (Snowsight → Admin → Account
+        → Account identifier). Then **Reboot app**.
 
-        **Grants (ACCOUNTADMIN) — run for the exact table path shown above:**
+        **2. Re-apply grants** (Snowsight as `ACCOUNTADMIN`):
 
         ```sql
+        GRANT USAGE ON WAREHOUSE VENUE_HYPE_WH TO ROLE VENUE_SWIPER_APP;
         GRANT USAGE ON DATABASE VENUE_HYPE TO ROLE VENUE_SWIPER_APP;
         GRANT USAGE ON SCHEMA VENUE_HYPE.STAGING_MARTS TO ROLE VENUE_SWIPER_APP;
-        GRANT SELECT ON TABLE {dim_places_table()} TO ROLE VENUE_SWIPER_APP;
+        GRANT SELECT ON TABLE VENUE_HYPE.STAGING_MARTS.DIM_PLACES TO ROLE VENUE_SWIPER_APP;
         GRANT USAGE ON SCHEMA VENUE_HYPE.APP TO ROLE VENUE_SWIPER_APP;
-        GRANT SELECT, INSERT, UPDATE ON TABLE {ratings_table()} TO ROLE VENUE_SWIPER_APP;
+        GRANT SELECT, INSERT, UPDATE ON TABLE VENUE_HYPE.APP.VENUE_RATINGS TO ROLE VENUE_SWIPER_APP;
         ```
+
+        **3. Confirm as service user in snowsql** (not Snowsight admin):
+
+        ```bat
+        snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH -f snowflake/verify_svc_access.sql
+        ```
+
+        The count must be **86**. If snowsql fails too, grants are still missing.  
+        If snowsql works but the app fails, the **account values don't match** (step 1).
         """
     )
 
@@ -516,11 +582,8 @@ def _activate_snowflake_role(session, role: str) -> None:
 
 
 def _configure_snowflake_session(session, params: dict[str, str]) -> None:
+    """Activate role only — snowsql works with (no database); use fully qualified table names."""
     _activate_snowflake_role(session, params["role"])
-    safe_db = params["database"].replace('"', '""')
-    safe_schema = params["schema"].replace('"', '""')
-    session.sql(f'USE DATABASE "{safe_db}"').collect()
-    session.sql(f'USE SCHEMA "{safe_schema}"').collect()
 
 
 def _create_snowflake_session():
@@ -824,9 +887,9 @@ def render_login() -> None:
 def render_venue_card(venue: dict[str, Any]) -> None:
     name = venue.get("PLACE_NAME") or "Unknown venue"
     address = venue.get("SHORT_FORMATTED_ADDRESS") or venue.get("FORMATTED_ADDRESS") or ""
-    category = (venue.get("VENUE_CATEGORY") or venue.get("PRIMARY_TYPE") or "venue").replace("_", " ")
+    category = (venue.get("VENUE_CATEGORY") or venue.get("PRIMARY_TYPE") or "venue").replace("_", " ").title()
     primary = (venue.get("PRIMARY_TYPE") or "").replace("_", " ")
-    price = (venue.get("PRICE_LEVEL") or "").replace("_", " ").title()
+    price = format_price_level(venue.get("PRICE_LEVEL"))
     website = venue.get("WEBSITE_URI") or ""
 
     meta_parts = [p for p in [primary, address.split(",")[0] if address else ""] if p]
