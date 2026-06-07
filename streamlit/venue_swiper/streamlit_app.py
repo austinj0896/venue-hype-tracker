@@ -399,6 +399,31 @@ def render_progress(stats: dict[str, int]) -> None:
     )
 
 
+def _snowflake_connection_params() -> dict[str, str]:
+    if "connections" not in st.secrets or "snowflake" not in st.secrets.connections:
+        missing = (
+            "Missing `[connections.snowflake]` in Streamlit App Secrets. "
+            "Open app Settings -> Secrets and paste the block from "
+            "`.streamlit/secrets.toml.example`."
+        )
+        raise RuntimeError(missing)
+
+    raw = dict(st.secrets.connections.snowflake)
+    required = ("account", "user", "password", "role", "warehouse", "database", "schema")
+    missing_keys = [key for key in required if not str(raw.get(key, "")).strip()]
+    if missing_keys:
+        raise RuntimeError(
+            "Secrets are missing or empty: "
+            + ", ".join(missing_keys)
+            + ". Check App Settings -> Secrets."
+        )
+
+    params = {key: str(raw[key]).strip() for key in required}
+    if "host" in raw and str(raw["host"]).strip():
+        params["host"] = str(raw["host"]).strip()
+    return params
+
+
 @st.cache_resource
 def get_session():
     try:
@@ -408,14 +433,49 @@ def get_session():
     except Exception:
         pass
 
+    errors: list[str] = []
+
     try:
         return st.connection("snowflake").session()
-    except Exception:
-        st.error(
-            "Could not connect to Snowflake. For Streamlit Community Cloud, add "
-            "`[connections.snowflake]` to App Secrets (see `.streamlit/secrets.toml.example`)."
+    except Exception as exc:
+        errors.append(f"st.connection: {exc}")
+
+    try:
+        from snowflake.snowpark import Session
+
+        return Session.builder.configs(_snowflake_connection_params()).create()
+    except Exception as exc:
+        errors.append(f"Session.builder: {exc}")
+
+    st.error("Could not connect to Snowflake.")
+    with st.expander("Connection details (for troubleshooting)"):
+        st.markdown(
+            """
+            **Check App Secrets (Settings -> Secrets):**
+
+            ```toml
+            [connections.snowflake]
+            account = "YOUR_ACCOUNT"
+            user = "VENUE_SWIPER_SVC"
+            password = "YOUR_PASSWORD"
+            role = "VENUE_SWIPER_APP"
+            warehouse = "VENUE_HYPE_WH"
+            database = "VENUE_HYPE"
+            schema = "APP"
+            ```
+
+            **Account value:** use the same identifier as `SNOWFLAKE_ACCOUNT` in your
+            local `.env` (e.g. `xy12345.us-east-1`). If that fails, try the
+            org-account form from Snowsight -> Account -> Account identifier
+            (e.g. `MYORG-MYACCOUNT`).
+
+            **Password:** use the `VENUE_SWIPER_SVC` password, not your personal login.
+            Wrap passwords with special characters in double quotes in Secrets.
+            """
         )
-        st.stop()
+        for message in errors:
+            st.code(message)
+    st.stop()
 
 
 def normalize_email(raw: str) -> str:

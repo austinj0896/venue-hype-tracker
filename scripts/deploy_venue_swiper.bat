@@ -14,7 +14,7 @@ if errorlevel 1 (
   echo PUT streamlit_app.py failed.
   exit /b 1
 )
-snowsql -c %SNOWSQL_CONNECTION% -q "PUT file://environment.yml @VENUE_HYPE.APP.VENUE_SWIPER_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;"
+snowsql -c %SNOWSQL_CONNECTION% -q "PUT file://environment.sis.yml @VENUE_HYPE.APP.VENUE_SWIPER_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;"
 snowsql -c %SNOWSQL_CONNECTION% -q "PUT file://.streamlit/config.toml @VENUE_HYPE.APP.VENUE_SWIPER_STAGE/.streamlit/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;"
 
 echo Creating or replacing Streamlit app object...
