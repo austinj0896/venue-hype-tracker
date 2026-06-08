@@ -1,5 +1,7 @@
 # Streamlit Community Cloud deploy checklist
 
+> **Free hosting (recommended):** use **Neon Postgres** instead of Snowflake — see [`neon/DEPLOY_NEON.md`](../../neon/DEPLOY_NEON.md).
+
 ## 1. GitHub (one time)
 
 From CMD in the project root:

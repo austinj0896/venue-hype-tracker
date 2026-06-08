@@ -2,9 +2,7 @@
 Après — discover and rate food & drink spots by neighborhood.
 Tagline: Find what comes next.
 
-Runs in Streamlit in Snowflake (SiS) or Streamlit Community Cloud.
-- SiS: Snowflake login + in-app email for personal ratings.
-- Community Cloud: share app URL; friends enter email only (service account in secrets).
+Runs on **Neon Postgres** (Streamlit Community Cloud) or **Snowflake** (SiS / legacy Cloud).
 """
 
 from __future__ import annotations
@@ -16,29 +14,23 @@ from typing import Any
 import streamlit as st
 import streamlit.components.v1 as components
 
+from db import (
+    backend,
+    clear_db_caches,
+    fetch_db_identity,
+    places_table as dim_places_table,
+    ratings_table,
+    run_query,
+    upsert_rating,
+)
+
 DEFAULT_BOROUGH = "Manhattan Beach"
-DEFAULT_DIM_PLACES = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"
-DEFAULT_RATINGS_TABLE = "VENUE_HYPE.APP.VENUE_RATINGS"
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 DISCOVER_BOROUGH_KEY = "discover_borough"
 
 
 def discover_venue_key(borough: str) -> str:
     return f"discover_venue_{borough}"
-
-
-def dim_places_table() -> str:
-    try:
-        return st.secrets.get("app", {}).get("dim_places", DEFAULT_DIM_PLACES)
-    except Exception:
-        return DEFAULT_DIM_PLACES
-
-
-def ratings_table() -> str:
-    try:
-        return st.secrets.get("app", {}).get("ratings_table", DEFAULT_RATINGS_TABLE)
-    except Exception:
-        return DEFAULT_RATINGS_TABLE
 
 # Food, drink, bars, clubs — excludes hotels, orgs, courts, schools, etc.
 ALLOWED_PRIMARY_TYPES = (
@@ -412,67 +404,17 @@ def inject_styles() -> None:
     st.markdown(f"<style>{APRES_CSS}</style>", unsafe_allow_html=True)
 
 
-def fetch_snowflake_identity() -> dict[str, str] | None:
-    """What user/role/account the app session is actually using."""
-    try:
-        row = run_query(
-            """
-            select
-                current_user() as snowflake_user,
-                current_role() as snowflake_role,
-                current_account() as account_locator,
-                current_organization_name() as org_name,
-                current_account_name() as account_name,
-                current_region() as region,
-                current_database() as snowflake_database,
-                current_warehouse() as snowflake_warehouse
-            """
-        )[0]
-        return {k.lower(): str(v) for k, v in row.items()}
-    except Exception:
-        return None
-
-
-def fetch_secrets_account_hint() -> str | None:
-    try:
-        return str(st.secrets.connections.snowflake.account).strip()
-    except Exception:
-        return None
-
-
-def show_snowflake_data_error(exc: Exception) -> None:
-    st.error("Cannot read venue data from Snowflake.")
-    st.markdown(
-        """
-        **What this means:** the app logged into Snowflake successfully, but this role
-        cannot read `STAGING_MARTS.DIM_PLACES` in the account Streamlit connected to.
-        """
-    )
+def show_data_error(exc: Exception) -> None:
+    db_label = "Neon Postgres" if backend() == "postgres" else "Snowflake"
+    st.error(f"Cannot read venue data from {db_label}.")
     st.markdown(f"**Error:** `{exc}`")
-    st.markdown(f"**Table queried:** `{dim_places_table()}`")
+    st.markdown(f"**Places table:** `{dim_places_table()}`")
 
-    secrets_account = fetch_secrets_account_hint()
-    if secrets_account:
-        st.markdown(f"**Account in Streamlit secrets:** `{secrets_account}`")
-
-    identity = fetch_snowflake_identity()
+    identity = fetch_db_identity()
     if identity:
-        st.markdown("**App session (live from Snowflake):**")
+        st.markdown("**Database session:**")
         st.code(
             "\n".join(f"{key}: {value}" for key, value in identity.items()),
-            language="text",
-        )
-        st.markdown(
-            """
-            **Compare with snowsql** — run this and check `account_locator` + `region` match
-            the values above exactly:
-            """
-        )
-        st.code(
-            "snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH\n"
-            "SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_ACCOUNT(), CURRENT_REGION();\n"
-            "SELECT COUNT(*) FROM VENUE_HYPE.STAGING_MARTS.DIM_PLACES "
-            "WHERE borough = 'Manhattan Beach';",
             language="text",
         )
 
@@ -490,40 +432,35 @@ def show_snowflake_data_error(exc: Exception) -> None:
     except Exception as probe_exc:
         st.markdown(f"**Live probe:** `{probe_exc}`")
 
-    if st.button("Retry Snowflake connection", type="primary"):
-        clear_snowflake_caches()
+    if st.button("Retry database connection", type="primary"):
+        clear_db_caches()
+        fetch_stats.clear()
+        fetch_boroughs.clear()
+        fetch_next_venue.clear()
+        fetch_user_ratings.clear()
         st.rerun()
 
-    st.markdown(
-        f"""
-        ### Fix checklist
+    if backend() == "postgres":
+        st.markdown(
+            """
+            **Neon checklist**
 
-        **1. Same account?**  
-        If snowsql `CURRENT_ACCOUNT()` / `CURRENT_REGION()` differ from the app session above,
-        fix the `account` value in Streamlit **Settings → Secrets** (Snowsight → Admin → Account
-        → Account identifier). Then **Reboot app**.
+            1. Streamlit secrets include `[connections.postgresql]` with your **pooled** Neon URL.
+            2. Ran `neon/schema.sql` and seeded places:
+               `python scripts/seed_neon_places.py --from-snowflake`
+            3. **Reboot app** after changing secrets.
+            """
+        )
+    else:
+        st.markdown(
+            f"""
+            **Snowflake checklist**
 
-        **2. Re-apply grants** (Snowsight as `ACCOUNTADMIN`):
-
-        ```sql
-        GRANT USAGE ON WAREHOUSE VENUE_HYPE_WH TO ROLE VENUE_SWIPER_APP;
-        GRANT USAGE ON DATABASE VENUE_HYPE TO ROLE VENUE_SWIPER_APP;
-        GRANT USAGE ON SCHEMA VENUE_HYPE.STAGING_MARTS TO ROLE VENUE_SWIPER_APP;
-        GRANT SELECT ON TABLE VENUE_HYPE.STAGING_MARTS.DIM_PLACES TO ROLE VENUE_SWIPER_APP;
-        GRANT USAGE ON SCHEMA VENUE_HYPE.APP TO ROLE VENUE_SWIPER_APP;
-        GRANT SELECT, INSERT, UPDATE ON TABLE VENUE_HYPE.APP.VENUE_RATINGS TO ROLE VENUE_SWIPER_APP;
-        ```
-
-        **3. Confirm as service user in snowsql** (not Snowsight admin):
-
-        ```bat
-        snowsql -a YOUR_ACCOUNT -u VENUE_SWIPER_SVC -r VENUE_SWIPER_APP -w VENUE_HYPE_WH -f snowflake/verify_svc_access.sql
-        ```
-
-        The count must be **86**. If snowsql fails too, grants are still missing.  
-        If snowsql works but the app fails, the **account values don't match** (step 1).
-        """
-    )
+            1. Grants on `{dim_places_table()}` and `{ratings_table()}` for the service role.
+            2. snowsql as `VENUE_SWIPER_SVC` returns a row count for places.
+            3. **Reboot app** after changing secrets.
+            """
+        )
 
 
 def render_apres_header(subtitle: str = "Manhattan Beach") -> None:
@@ -555,83 +492,6 @@ def render_progress(stats: dict[str, int]) -> None:
     )
 
 
-def _snowflake_connection_params() -> dict[str, str]:
-    if "connections" not in st.secrets or "snowflake" not in st.secrets.connections:
-        missing = (
-            "Missing `[connections.snowflake]` in Streamlit App Secrets. "
-            "Open app Settings -> Secrets and paste the block from "
-            "`.streamlit/secrets.toml.example`."
-        )
-        raise RuntimeError(missing)
-
-    raw = dict(st.secrets.connections.snowflake)
-    required = ("account", "user", "password", "role", "warehouse", "database", "schema")
-    missing_keys = [key for key in required if not str(raw.get(key, "")).strip()]
-    if missing_keys:
-        raise RuntimeError(
-            "Secrets are missing or empty: "
-            + ", ".join(missing_keys)
-            + ". Check App Settings -> Secrets."
-        )
-
-    params = {key: str(raw[key]).strip() for key in required}
-    if "host" in raw and str(raw["host"]).strip():
-        params["host"] = str(raw["host"]).strip()
-    return params
-
-
-def _activate_snowflake_role(session, role: str) -> None:
-    """Ensure the session uses the role from secrets (st.connection can leave a stale default)."""
-    safe_role = role.replace('"', '""')
-    session.sql(f'USE ROLE "{safe_role}"').collect()
-
-
-def _configure_snowflake_session(session, params: dict[str, str]) -> None:
-    """Activate role only — snowsql works with (no database); use fully qualified table names."""
-    _activate_snowflake_role(session, params["role"])
-
-
-def _create_snowflake_session():
-    from snowflake.snowpark import Session
-
-    params = _snowflake_connection_params()
-    session = Session.builder.configs(params).create()
-    _configure_snowflake_session(session, params)
-    return session
-
-
-def clear_snowflake_caches() -> None:
-    fetch_stats.clear()
-    fetch_boroughs.clear()
-    fetch_next_venue.clear()
-    fetch_user_ratings.clear()
-    st.session_state.pop("snowflake_session", None)
-
-
-def get_session():
-    try:
-        from snowflake.snowpark.context import get_active_session
-
-        return get_active_session()
-    except Exception:
-        pass
-
-    if "snowflake_session" not in st.session_state:
-        try:
-            st.session_state.snowflake_session = _create_snowflake_session()
-        except Exception as exc:
-            st.error("Could not connect to Snowflake.")
-            st.markdown(
-                """
-                Check **App Settings → Secrets** for `[connections.snowflake]` with
-                `user`, `password`, `role`, `account`, `warehouse`, `database`, and `schema`.
-                """
-            )
-            st.code(str(exc))
-            st.stop()
-    return st.session_state.snowflake_session
-
-
 def normalize_email(raw: str) -> str:
     return raw.strip().lower()
 
@@ -647,15 +507,6 @@ def stars_text(value: float | None) -> str:
     half = 1 if value - full >= 0.5 else 0
     empty = 5 - full - half
     return "★" * full + ("½" if half else "") + "☆" * empty
-
-
-def run_query(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
-    session = get_session()
-    try:
-        rows = session.sql(sql, params=params or []).collect()
-    except Exception as exc:
-        raise RuntimeError(f"Snowflake query failed: {exc}") from exc
-    return [row.as_dict() for row in rows]
 
 
 def venue_type_filter_sql(alias: str = "d") -> tuple[str, list[str]]:
@@ -706,8 +557,8 @@ def fetch_stats(email: str, borough: str) -> dict[str, int]:
         select
             count(*) as total_venues,
             count(r.rating_id) as reviewed,
-            count_if(r.status = 'rated') as rated,
-            count_if(r.status = 'skipped') as skipped
+            count(*) filter (where r.status = 'rated') as rated,
+            count(*) filter (where r.status = 'skipped') as skipped
         from {dim_places_table()} d
         left join {ratings_table()} r
             on r.google_place_id = d.google_place_id
@@ -795,84 +646,14 @@ def save_rating(
     status: str,
     rating: float | None,
 ) -> None:
-    session = get_session()
-    if status == "skipped":
-        sql = f"""
-            merge into {ratings_table()} as target
-            using (
-                select
-                    ? as user_email,
-                    ? as google_place_id,
-                    ? as place_name,
-                    ? as borough,
-                    ? as status
-            ) as source
-            on target.user_email = source.user_email
-               and target.google_place_id = source.google_place_id
-            when matched then update set
-                place_name = source.place_name,
-                borough = source.borough,
-                rating = null,
-                status = source.status,
-                updated_at = current_timestamp()
-            when not matched then insert (
-                user_email,
-                google_place_id,
-                place_name,
-                borough,
-                rating,
-                status
-            ) values (
-                source.user_email,
-                source.google_place_id,
-                source.place_name,
-                source.borough,
-                null,
-                source.status
-            )
-        """
-        params = [email, google_place_id, place_name, borough, status]
-    else:
-        if rating is None:
-            raise ValueError("Rated rows require a numeric rating.")
-        sql = f"""
-            merge into {ratings_table()} as target
-            using (
-                select
-                    ? as user_email,
-                    ? as google_place_id,
-                    ? as place_name,
-                    ? as borough,
-                    ?::float as rating,
-                    ? as status
-            ) as source
-            on target.user_email = source.user_email
-               and target.google_place_id = source.google_place_id
-            when matched then update set
-                place_name = source.place_name,
-                borough = source.borough,
-                rating = source.rating,
-                status = source.status,
-                updated_at = current_timestamp()
-            when not matched then insert (
-                user_email,
-                google_place_id,
-                place_name,
-                borough,
-                rating,
-                status
-            ) values (
-                source.user_email,
-                source.google_place_id,
-                source.place_name,
-                source.borough,
-                source.rating,
-                source.status
-            )
-        """
-        params = [email, google_place_id, place_name, borough, float(rating), status]
-
-    session.sql(sql, params=params).collect()
+    upsert_rating(
+        email=email,
+        borough=borough,
+        google_place_id=google_place_id,
+        place_name=place_name,
+        status=status,
+        rating=rating,
+    )
     fetch_stats.clear()
     fetch_next_venue.clear()
     fetch_user_ratings.clear()
@@ -891,7 +672,7 @@ def render_login() -> None:
             <p>Swipe through local spots you've tried. Skip anything you haven't visited yet -
             you can always come back and rate it later.</p>
             <p style="margin-top:0.75rem;font-size:12px;color:var(--text-light);">
-            Your email saves your personal ratings. No Snowflake account needed on this hosted app.</p>
+            Your email saves your personal ratings. No account needed beyond this screen.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -951,7 +732,7 @@ def render_discover(email: str) -> None:
     try:
         boroughs = fetch_boroughs()
     except Exception as exc:
-        show_snowflake_data_error(exc)
+        show_data_error(exc)
         return
 
     if not boroughs:
@@ -970,7 +751,7 @@ def render_discover(email: str) -> None:
     try:
         stats = fetch_stats(email, borough)
     except Exception as exc:
-        show_snowflake_data_error(exc)
+        show_data_error(exc)
         return
 
     st.markdown('<div class="section-label">Discover</div>', unsafe_allow_html=True)
@@ -1050,7 +831,7 @@ def verify_data_access() -> bool:
         run_query(f"select 1 from {dim_places_table()} limit 1")
         return True
     except Exception as exc:
-        show_snowflake_data_error(exc)
+        show_data_error(exc)
         return False
 
 
@@ -1058,7 +839,7 @@ def render_rated_list(email: str) -> None:
     try:
         rows = fetch_user_ratings(email, status="rated")
     except Exception as exc:
-        show_snowflake_data_error(exc)
+        show_data_error(exc)
         return
     st.markdown('<div class="section-label">Your ratings</div>', unsafe_allow_html=True)
     if not rows:
@@ -1129,7 +910,7 @@ def render_skipped_list(email: str) -> None:
     try:
         rows = fetch_user_ratings(email, status="skipped")
     except Exception as exc:
-        show_snowflake_data_error(exc)
+        show_data_error(exc)
         return
     st.markdown('<div class="section-label">Skipped &middot; not visited yet</div>', unsafe_allow_html=True)
     if not rows:
