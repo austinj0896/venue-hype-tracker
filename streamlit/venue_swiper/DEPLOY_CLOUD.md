@@ -26,7 +26,7 @@ git push -u origin main
 3. Repository: your GitHub repo
 4. Branch: `main`
 5. **Main file path:** `streamlit/venue_swiper/streamlit_app.py`
-6. **App URL (optional):** e.g. `vesper-manhattan-beach`
+6. **App URL (optional):** e.g. `apres-venues`
 
 Advanced settings:
 

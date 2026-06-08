@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS VENUE_RATINGS (
 --     FROM '@VENUE_HYPE.APP.VENUE_SWIPER_STAGE'
 --     MAIN_FILE = 'streamlit_app.py'
 --     QUERY_WAREHOUSE = VENUE_HYPE_WH
---     TITLE = 'Manhattan Beach Venue Swiper'
---     COMMENT = 'Swipe-style venue ratings for Manhattan Beach pilots';
+--     TITLE = 'Après'
+--     COMMENT = 'Find what comes next.';
 
 -- Share with viewers (adjust role name):
 -- GRANT USAGE ON DATABASE VENUE_HYPE TO ROLE <viewer_role>;

@@ -18,7 +18,7 @@ snowsql -c %SNOWSQL_CONNECTION% -q "PUT file://environment.sis.yml @VENUE_HYPE.A
 snowsql -c %SNOWSQL_CONNECTION% -q "PUT file://.streamlit/config.toml @VENUE_HYPE.APP.VENUE_SWIPER_STAGE/.streamlit/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;"
 
 echo Creating or replacing Streamlit app object...
-snowsql -c %SNOWSQL_CONNECTION% -q "CREATE OR REPLACE STREAMLIT VENUE_HYPE.APP.VENUE_SWIPER FROM '@VENUE_HYPE.APP.VENUE_SWIPER_STAGE' MAIN_FILE = 'streamlit_app.py' QUERY_WAREHOUSE = VENUE_HYPE_WH TITLE = 'Vesper - Manhattan Beach' COMMENT = 'Vesper-styled venue ratings for Manhattan Beach';"
+snowsql -c %SNOWSQL_CONNECTION% -q "CREATE OR REPLACE STREAMLIT VENUE_HYPE.APP.VENUE_SWIPER FROM '@VENUE_HYPE.APP.VENUE_SWIPER_STAGE' MAIN_FILE = 'streamlit_app.py' QUERY_WAREHOUSE = VENUE_HYPE_WH TITLE = 'Après' COMMENT = 'Après venue ratings — find what comes next';"
 if errorlevel 1 exit /b 1
 
 echo.

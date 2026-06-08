@@ -1,5 +1,6 @@
 """
-Venue Swiper — discover and rate food & drink spots by neighborhood.
+Après — discover and rate food & drink spots by neighborhood.
+Tagline: Find what comes next.
 
 Runs in Streamlit in Snowflake (SiS) or Streamlit Community Cloud.
 - SiS: Snowflake login + in-app email for personal ratings.
@@ -76,7 +77,7 @@ FONT_SERIF = "Georgia, 'Times New Roman', serif"
 FONT_SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
 
 # SiS strips <link> tags and often breaks <style> inside st.markdown — inject via components.html.
-VESPER_CSS = f"""
+APRES_CSS = f"""
 :root {{
     --cream: #F8E6D2;
     --brown: #704D3B;
@@ -110,7 +111,7 @@ h1, h2, h3 {{
     font-weight: 400 !important;
     color: var(--brown) !important;
 }}
-.vesper-status {{
+.apres-status {{
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -120,13 +121,13 @@ h1, h2, h3 {{
     letter-spacing: 0.05em;
     margin-bottom: 1rem;
 }}
-.vesper-status .tagline {{
+.apres-status .tagline {{
     font-family: {FONT_SERIF};
     font-size: 13px;
     font-style: italic;
     letter-spacing: 0;
 }}
-.vesper-greeting {{
+.apres-greeting {{
     font-family: {FONT_SERIF};
     font-size: 30px;
     font-weight: 300;
@@ -135,7 +136,7 @@ h1, h2, h3 {{
     line-height: 1.2;
     margin: 0 0 0.25rem 0;
 }}
-.vesper-sub {{
+.apres-sub {{
     font-size: 11px;
     color: var(--text-light);
     letter-spacing: 0.1em;
@@ -377,7 +378,7 @@ div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
 """
 
 st.set_page_config(
-    page_title="Vesper - Manhattan Beach",
+    page_title="Après",
     page_icon="*",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -395,20 +396,20 @@ def format_price_level(raw: str | None) -> str:
 
 def inject_styles() -> None:
     # st.html() on Streamlit Cloud does not run parent-document scripts — use components.html.
-    css_literal = json.dumps(VESPER_CSS)
+    css_literal = json.dumps(APRES_CSS)
     script = f"""<script>
     (function() {{
         const doc = window.parent.document;
-        if (doc.getElementById("vesper-styles")) return;
+        if (doc.getElementById("apres-styles")) return;
         const el = doc.createElement("style");
-        el.id = "vesper-styles";
+        el.id = "apres-styles";
         el.textContent = {css_literal};
         doc.head.appendChild(el);
     }})();
     </script>"""
     components.html(script, height=0, width=0)
     # Fallback: styles widgets inside the app iframe when parent injection is blocked.
-    st.markdown(f"<style>{VESPER_CSS}</style>", unsafe_allow_html=True)
+    st.markdown(f"<style>{APRES_CSS}</style>", unsafe_allow_html=True)
 
 
 def fetch_snowflake_identity() -> dict[str, str] | None:
@@ -525,18 +526,18 @@ def show_snowflake_data_error(exc: Exception) -> None:
     )
 
 
-def render_vesper_header(subtitle: str = "Manhattan Beach") -> None:
+def render_apres_header(subtitle: str = "Manhattan Beach") -> None:
     st.markdown(
         """
-        <div class="vesper-status">
-            <span>VESPER</span>
-            <span class="tagline">the evening hour</span>
+        <div class="apres-status">
+            <span>Apr&egrave;s</span>
+            <span class="tagline">Find what comes next.</span>
             <span>&middot;</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.markdown(f'<p class="vesper-greeting">{subtitle}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="apres-greeting">{subtitle}</p>', unsafe_allow_html=True)
 
 
 def render_progress(stats: dict[str, int]) -> None:
@@ -879,9 +880,9 @@ def save_rating(
 
 
 def render_login() -> None:
-    render_vesper_header("Rate the coast.")
+    render_apres_header("Rate the coast.")
     st.markdown(
-        '<p class="vesper-sub">venue ratings &middot; pick a neighborhood in Discover</p>',
+        '<p class="apres-sub">venue ratings &middot; pick a neighborhood in Discover</p>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -1199,9 +1200,9 @@ def main() -> None:
     email = st.session_state["user_email"]
     display_name = email.split("@")[0].replace(".", " ").title()
 
-    render_vesper_header(f"Good evening, {display_name}.")
+    render_apres_header(f"Good evening, {display_name}.")
     st.markdown(
-        f'<p class="vesper-sub">signed in as {email}</p>',
+        f'<p class="apres-sub">signed in as {email}</p>',
         unsafe_allow_html=True,
     )
 
