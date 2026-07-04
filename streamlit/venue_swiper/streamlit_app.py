@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import streamlit as st
@@ -23,6 +24,21 @@ from db import (
     run_query,
     upsert_rating,
 )
+from date_planner import (
+    DATE_COMBOS,
+    DatePlan,
+    RatingLookup,
+    combo_by_id,
+    find_date_plans,
+    pick_random_plan,
+    rating_badge_label,
+    rebuild_plan,
+    venues_for_stop,
+)
+from geo import filter_by_radius, miles_to_meters
+from location_ui import render_location_picker
+from places_data import fetch_community_ratings, fetch_venues_with_coords
+from planned_dates_store import fetch_planned_dates, save_planned_date
 
 DEFAULT_BOROUGH = "Manhattan Beach"
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -302,6 +318,52 @@ h1, h2, h3 {{
     color: var(--steel);
     font-size: 14px;
     margin-bottom: 8px;
+}}
+.date-plan-card {{
+    background: white;
+    border-radius: 16px;
+    border: 0.5px solid rgba(112,77,59,0.12);
+    padding: 14px 16px;
+    margin-bottom: 12px;
+}}
+.date-plan-header {{
+    font-family: {FONT_SERIF};
+    font-size: 18px;
+    color: var(--brown);
+    margin-bottom: 10px;
+}}
+.date-plan-stop {{
+    padding: 10px 0;
+    border-bottom: 0.5px solid rgba(112,77,59,0.08);
+}}
+.date-plan-stop:last-of-type {{
+    border-bottom: none;
+}}
+.date-plan-stop-num {{
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 2px;
+}}
+.date-plan-stop-name {{
+    font-family: {FONT_SERIF};
+    font-size: 17px;
+    color: var(--brown);
+}}
+.date-plan-stop-meta {{
+    font-size: 11px;
+    color: var(--text-light);
+}}
+.date-plan-walk {{
+    text-align: center;
+    font-size: 12px;
+    color: var(--steel);
+    padding: 8px 0;
+    letter-spacing: 0.04em;
+}}
+.date-plan-walk strong {{
+    color: var(--brown);
 }}
 .stars-preview {{
     font-family: {FONT_SERIF};
@@ -657,7 +719,359 @@ def save_rating(
     fetch_stats.clear()
     fetch_next_venue.clear()
     fetch_user_ratings.clear()
+    fetch_community_ratings.clear()
     clear_discover_venue()
+
+
+def get_ors_api_key() -> str | None:
+    try:
+        key = st.secrets.get("app", {}).get("ors_api_key", "")
+        if key and str(key).strip():
+            return str(key).strip()
+    except Exception:
+        pass
+    import os
+
+    return os.environ.get("ORS_API_KEY") or None
+
+
+def format_walk_line(plan: DatePlan) -> str:
+    mi = plan.walk.distance_m / 1609.344
+    src = "walk" if plan.walk.source == "ors" else "est."
+    return f'<strong>{plan.walk.duration_min:.0f} min</strong> walk ({mi:.2f} mi, {src})'
+
+
+def render_date_stop(label: str, venue: dict, rating_stats: RatingLookup) -> str:
+    name = venue.get("PLACE_NAME") or "Unknown"
+    pt = (venue.get("PRIMARY_TYPE") or "").replace("_", " ")
+    addr = venue.get("SHORT_FORMATTED_ADDRESS") or venue.get("FORMATTED_ADDRESS") or ""
+    pid = str(venue.get("GOOGLE_PLACE_ID") or "")
+    badge = rating_badge_label(rating_stats.get(pid))
+    return f"""
+    <div class="date-plan-stop">
+        <div class="date-plan-stop-num">{label}</div>
+        <div class="date-plan-stop-name">{name}</div>
+        <div class="date-plan-stop-meta">{pt} &middot; {addr}</div>
+        <div class="date-plan-stop-meta" style="color:var(--gold);margin-top:2px;">{badge}</div>
+    </div>
+    """
+
+
+def render_date_plan_card(plan: DatePlan, rating_stats: RatingLookup) -> None:
+    st.markdown(
+        f"""
+        <div class="date-plan-card">
+            <div class="date-plan-header">{plan.combo.label}</div>
+            {render_date_stop(f"1 · {plan.combo.first_label}", plan.first_stop, rating_stats)}
+            <div class="date-plan-walk">{format_walk_line(plan)}</div>
+            {render_date_stop(f"2 · {plan.combo.second_label}", plan.second_stop, rating_stats)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _build_nearby_venue_pool(
+    *,
+    borough: str,
+    combo,
+    location,
+    radius_mi: float,
+) -> list[dict]:
+    all_types = tuple(sorted(set(combo.first_types) | set(combo.second_types)))
+    venues = fetch_venues_with_coords(borough, all_types)
+    if not venues:
+        return []
+    return filter_by_radius(
+        venues,
+        origin_lat=location.lat,
+        origin_lon=location.lon,
+        radius_m=miles_to_meters(radius_mi),
+    )
+
+
+def render_planned_dates_list(email: str) -> None:
+    try:
+        rows = fetch_planned_dates(email, upcoming_only=True)
+    except Exception as exc:
+        st.caption(f"Could not load saved dates: {exc}")
+        return
+
+    st.markdown('<div class="section-label">Your planned dates</div>', unsafe_allow_html=True)
+    if not rows:
+        st.markdown(
+            '<div class="login-panel"><p>No upcoming dates saved yet.</p></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    for row in rows:
+        when = row.get("SCHEDULED_AT")
+        when_label = str(when)[:16] if when else "TBD"
+        stop1 = row.get("STOP1_PLACE_NAME") or "Stop 1"
+        stop2 = row.get("STOP2_PLACE_NAME") or "Stop 2"
+        combo = row.get("COMBO_LABEL") or "Date"
+        walk = row.get("WALK_DURATION_MIN")
+        walk_txt = f"{float(walk):.0f} min walk" if walk is not None else ""
+        borough = row.get("BOROUGH") or ""
+        meta = " · ".join(p for p in [when_label, borough, walk_txt] if p)
+        st.markdown(
+            f"""
+            <div class="bucket-card">
+                <div class="bucket-title">{combo}</div>
+                <div class="bucket-sub">{stop1} → {stop2}</div>
+                <div class="bucket-sub">{meta}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_date_draft_editor(
+    *,
+    email: str,
+    borough: str,
+    combo,
+    rating_stats: RatingLookup,
+    ors_key: str | None,
+) -> None:
+    draft: DatePlan | None = st.session_state.get("date_draft")
+    if draft is None:
+        return
+
+    nearby: list[dict] = st.session_state.get("date_nearby_venues") or []
+    pool: list[DatePlan] = st.session_state.get("date_plans_pool") or []
+
+    st.markdown('<div class="section-label">Your date</div>', unsafe_allow_html=True)
+    render_date_plan_card(draft, rating_stats)
+
+    col_reroll, col_spacer = st.columns([1, 2])
+    with col_reroll:
+        if st.button("Re-roll date", use_container_width=True, type="secondary"):
+            nxt = pick_random_plan(pool, rating_stats, exclude=draft)
+            if nxt:
+                st.session_state["date_draft"] = nxt
+            st.rerun()
+
+    stop1_venues = venues_for_stop(nearby, combo, stop_index=0)
+    stop2_venues = venues_for_stop(nearby, combo, stop_index=1)
+
+    def venue_options(venues: list[dict]) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for v in venues:
+            pid = str(v.get("GOOGLE_PLACE_ID") or "")
+            ptype = str(v.get("PRIMARY_TYPE") or "").replace("_", " ")
+            name = v.get("PLACE_NAME") or "Unknown"
+            label = f"{name} ({ptype})"
+            if label in out:
+                label = f"{label} · {pid[-6:]}"
+            out[label] = v
+        return out
+
+    opts1 = venue_options(stop1_venues)
+    opts2 = venue_options(stop2_venues)
+    cur1_key = next(
+        (k for k, v in opts1.items() if v.get("GOOGLE_PLACE_ID") == draft.first_stop.get("GOOGLE_PLACE_ID")),
+        list(opts1.keys())[0] if opts1 else None,
+    )
+    cur2_key = next(
+        (k for k, v in opts2.items() if v.get("GOOGLE_PLACE_ID") == draft.second_stop.get("GOOGLE_PLACE_ID")),
+        list(opts2.keys())[0] if opts2 else None,
+    )
+
+    if opts1:
+        pick1 = st.selectbox(
+            f"Change {combo.first_label.lower()}",
+            options=list(opts1.keys()),
+            index=list(opts1.keys()).index(cur1_key) if cur1_key in opts1 else 0,
+            key="draft_pick_stop1",
+        )
+        new_stop1 = opts1[pick1]
+        if new_stop1.get("GOOGLE_PLACE_ID") != draft.first_stop.get("GOOGLE_PLACE_ID"):
+            st.session_state["date_draft"] = rebuild_plan(
+                combo, new_stop1, draft.second_stop, ors_api_key=ors_key
+            )
+            st.rerun()
+
+    if opts2:
+        pick2 = st.selectbox(
+            f"Change {combo.second_label.lower()}",
+            options=list(opts2.keys()),
+            index=list(opts2.keys()).index(cur2_key) if cur2_key in opts2 else 0,
+            key="draft_pick_stop2",
+        )
+        new_stop2 = opts2[pick2]
+        if new_stop2.get("GOOGLE_PLACE_ID") != draft.second_stop.get("GOOGLE_PLACE_ID"):
+            st.session_state["date_draft"] = rebuild_plan(
+                combo, draft.first_stop, new_stop2, ors_api_key=ors_key
+            )
+            st.rerun()
+
+    st.markdown('<div class="section-label">Schedule it</div>', unsafe_allow_html=True)
+    default_day = date.today() + timedelta(days=1)
+    default_time = time(19, 0)
+
+    with st.form("plan_date_form", clear_on_submit=False):
+        sched_date = st.date_input("Date", value=default_day)
+        sched_time = st.time_input("Time", value=default_time)
+        submitted = st.form_submit_button("Plan date", type="primary", use_container_width=True)
+
+    if submitted:
+        scheduled_at = datetime.combine(sched_date, sched_time)
+        try:
+            save_planned_date(
+                email=email,
+                borough=borough,
+                combo_id=combo.id,
+                combo_label=combo.label,
+                stop1=draft.first_stop,
+                stop2=draft.second_stop,
+                walk_distance_m=draft.walk.distance_m,
+                walk_duration_min=draft.walk.duration_min,
+                scheduled_at=scheduled_at,
+            )
+            fetch_planned_dates.clear()
+            st.session_state.pop("date_draft", None)
+            st.toast(f"Saved for {scheduled_at.strftime('%a %b %d at %I:%M %p')}")
+            st.rerun()
+        except Exception as exc:
+            st.error(
+                f"Could not save date: {exc}\n\n"
+                "If the table is missing, run `neon/planned_dates_schema.sql` on your database."
+            )
+
+
+def render_plan_date(email: str) -> None:
+    try:
+        boroughs = fetch_boroughs()
+    except Exception as exc:
+        show_data_error(exc)
+        return
+
+    if not boroughs:
+        st.warning("No locations in the venue catalog yet.")
+        return
+
+    st.markdown('<div class="section-label">Plan a date</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="swipe-hint">Build a two-stop evening — re-roll, swap stops, then save with a date & time.</p>',
+        unsafe_allow_html=True,
+    )
+
+    if "plan_borough" not in st.session_state:
+        st.session_state["plan_borough"] = (
+            DEFAULT_BOROUGH if DEFAULT_BOROUGH in boroughs else boroughs[0]
+        )
+    borough = st.selectbox("Area", boroughs, key="plan_borough")
+
+    location = render_location_picker(borough=borough)
+    if not location:
+        st.info("Set a starting point above to find a date.")
+        render_planned_dates_list(email)
+        return
+
+    combo_labels = {c.id: c.label for c in DATE_COMBOS}
+    combo_id = st.selectbox(
+        "Date type",
+        options=list(combo_labels.keys()),
+        format_func=lambda cid: combo_labels[cid],
+        key="plan_combo",
+    )
+    combo = next(c for c in DATE_COMBOS if c.id == combo_id)
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        radius_mi = st.slider(
+            "Within this distance of you",
+            min_value=0.25,
+            max_value=2.0,
+            value=1.0,
+            step=0.25,
+            format="%.2f mi",
+            key="plan_radius_mi",
+        )
+    with col_b:
+        max_walk = st.slider(
+            "Max walk between stops",
+            min_value=5,
+            max_value=25,
+            value=15,
+            step=5,
+            format="%d min",
+            key="plan_max_walk",
+        )
+
+    ors_key = get_ors_api_key()
+    if ors_key:
+        st.caption("Walk times via OpenRouteService when available.")
+    else:
+        st.caption("Walk times estimated. Add `ors_api_key` to secrets for ORS routing.")
+
+    try:
+        rating_stats = fetch_community_ratings(borough)
+    except Exception as exc:
+        show_data_error(exc)
+        return
+
+    if st.button("Find a date", type="primary", use_container_width=True):
+        with st.spinner("Finding a date near you…"):
+            try:
+                nearby = _build_nearby_venue_pool(
+                    borough=borough,
+                    combo=combo,
+                    location=location,
+                    radius_mi=radius_mi,
+                )
+                if not nearby:
+                    st.warning(
+                        f"No venues within {radius_mi:.2f} mi. "
+                        "Try a larger radius or move your pin."
+                    )
+                    st.session_state.pop("date_draft", None)
+                    return
+
+                pool = find_date_plans(
+                    nearby,
+                    combo,
+                    max_walk_minutes=float(max_walk),
+                    ors_api_key=ors_key,
+                    rating_stats=rating_stats,
+                    max_results=30,
+                )
+                if not pool:
+                    st.warning(
+                        "No walkable pairs found. Widen radius or allow a longer walk."
+                    )
+                    st.session_state.pop("date_draft", None)
+                    return
+
+                draft = pick_random_plan(pool, rating_stats)
+                st.session_state["date_plans_pool"] = pool
+                st.session_state["date_nearby_venues"] = nearby
+                st.session_state["date_plan_rating_stats"] = rating_stats
+                st.session_state["date_draft"] = draft
+                st.session_state["date_draft_borough"] = borough
+                st.session_state["date_draft_combo_id"] = combo.id
+            except Exception as exc:
+                st.error(f"Could not build date: {exc}")
+                return
+
+    draft: DatePlan | None = st.session_state.get("date_draft")
+    if draft:
+        draft_combo = combo_by_id(st.session_state.get("date_draft_combo_id", combo_id)) or combo
+        draft_borough = st.session_state.get("date_draft_borough", borough)
+        stats: RatingLookup = st.session_state.get("date_plan_rating_stats") or rating_stats
+        render_date_draft_editor(
+            email=email,
+            borough=draft_borough,
+            combo=draft_combo,
+            rating_stats=stats,
+            ors_key=ors_key,
+        )
+    elif "date_plans_pool" in st.session_state:
+        st.warning("No date in your pool matched those filters.")
+
+    render_planned_dates_list(email)
 
 
 def render_login() -> None:
@@ -997,10 +1411,15 @@ def main() -> None:
     if not verify_data_access():
         return
 
-    tab_discover, tab_rated, tab_skipped = st.tabs(["Discover", "My ratings", "Skipped"])
+    tab_discover, tab_plan, tab_rated, tab_skipped = st.tabs(
+        ["Discover", "Plan a date", "My ratings", "Skipped"]
+    )
 
     with tab_discover:
         render_discover(email)
+
+    with tab_plan:
+        render_plan_date(email)
 
     with tab_rated:
         render_rated_list(email)
