@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .wrap {
+      padding: 2px 0 0;
+    }
+    button {
+      width: 100%;
+      box-sizing: border-box;
+      appearance: none;
+      background: #704D3B;
+      color: #F8E6D2;
+      border: none;
+      border-radius: 12px;
+      padding: 0.72rem 1rem;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.1s ease;
+      box-shadow: 0 4px 14px rgba(44, 26, 16, 0.08);
+    }
+    button:hover:not(:disabled) {
+      background: #5e4030;
+    }
+    button:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+    button:disabled {
+      opacity: 0.65;
+      cursor: default;
+    }
+    button.done {
+      background: #F8E6D2;
+      color: #704D3B;
+      border: 0.5px solid rgba(112, 77, 59, 0.18);
+      box-shadow: none;
+    }
+    .status {
+      margin-top: 0.45rem;
+      font-size: 11px;
+      color: #B09080;
+      text-align: center;
+      letter-spacing: 0.04em;
+      min-height: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <button id="btn" type="button">Share location</button>
+    <div class="status" id="status"></div>
+  </div>
+  <script>
+    const btn = document.getElementById("btn");
+    const status = document.getElementById("status");
+
+    function send(type, data) {
+      window.parent.postMessage(
+        Object.assign({ isStreamlitMessage: true, type: type }, data),
+        "*"
+      );
+    }
+
+    function setReady() {
+      send("streamlit:componentReady", { apiVersion: 1 });
+      send("streamlit:setFrameHeight", { height: document.body.scrollHeight + 4 });
+    }
+
+    function setValue(value) {
+      send("streamlit:setComponentValue", { value: value });
+    }
+
+    setReady();
+
+    btn.addEventListener("click", function () {
+      status.textContent = "Waiting for permission…";
+      btn.disabled = true;
+
+      if (!navigator.geolocation) {
+        status.textContent = "Location not supported in this browser.";
+        btn.disabled = false;
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        function (pos) {
+          setValue({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          });
+          btn.textContent = "Update location";
+          btn.classList.add("done");
+          status.textContent = "";
+          btn.disabled = false;
+          send("streamlit:setFrameHeight", { height: document.body.scrollHeight + 4 });
+        },
+        function (err) {
+          status.textContent = err.message || "Location unavailable";
+          btn.disabled = false;
+          send("streamlit:setFrameHeight", { height: document.body.scrollHeight + 4 });
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+      );
+    });
+  </script>
+</body>
+</html>

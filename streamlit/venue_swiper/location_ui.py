@@ -6,12 +6,7 @@ from dataclasses import dataclass
 
 import streamlit as st
 
-try:
-    from streamlit_geolocation import streamlit_geolocation
-
-    HAS_GEOLOCATION = True
-except ImportError:
-    HAS_GEOLOCATION = False
+from apres_geolocation import apres_geolocation
 
 try:
     from streamlit_folium import st_folium
@@ -38,7 +33,6 @@ SESSION_SOURCE = "date_origin_source"
 MODE_NEAR_ME = "Near me"
 MODE_ON_MAP = "On the map"
 
-# Minimal, modern basemap (Carto Voyager).
 MAP_TILES = "CartoDB voyager"
 
 APRES_PIN_HTML = """
@@ -96,7 +90,7 @@ def location_status_html(*, borough: str, source: str) -> str:
     )
 
 
-def make_apres_map(lat: float, lon: float) -> folium.Map:
+def make_apres_map(lat: float, lon: float) -> "folium.Map":
     m = folium.Map(
         location=[lat, lon],
         zoom_start=15,
@@ -142,26 +136,20 @@ def render_location_picker(*, borough: str) -> UserLocation | None:
     st.markdown("</div>", unsafe_allow_html=True)
 
     if mode == MODE_NEAR_ME:
-        if not HAS_GEOLOCATION:
-            st.caption("Location sharing isn’t available here — use the map instead.")
-        else:
-            st.caption("Allow location access when prompted.")
-            loc = None
-            try:
-                loc = streamlit_geolocation()
-            except Exception:
-                st.caption("Use **On the map** to drop a pin instead.")
-            if (
-                isinstance(loc, dict)
-                and loc.get("latitude") is not None
-                and loc.get("longitude") is not None
-            ):
-                save_location(
-                    float(loc["latitude"]),
-                    float(loc["longitude"]),
-                    "geolocation",
-                )
-                saved = get_saved_location()
+        st.markdown('<div class="location-geo-wrap">', unsafe_allow_html=True)
+        loc = apres_geolocation(key="apres_share_location")
+        st.markdown("</div>", unsafe_allow_html=True)
+        if (
+            isinstance(loc, dict)
+            and loc.get("latitude") is not None
+            and loc.get("longitude") is not None
+        ):
+            save_location(
+                float(loc["latitude"]),
+                float(loc["longitude"]),
+                "geolocation",
+            )
+            saved = get_saved_location()
 
     elif mode == MODE_ON_MAP:
         if not HAS_FOLIUM:

@@ -415,6 +415,11 @@ iframe[title="streamlit_folium.streamlit_folium"] {{
     border: 0.5px solid rgba(112,77,59,0.14) !important;
     box-shadow: 0 8px 24px rgba(44,26,16,0.06);
 }}
+.location-geo-wrap iframe {{
+    border-radius: 12px !important;
+    border: none !important;
+    background: transparent !important;
+}}
 .stars-preview {{
     font-family: {FONT_SERIF};
     font-size: 22px;
