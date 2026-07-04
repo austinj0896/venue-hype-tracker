@@ -14,7 +14,6 @@ from html import escape
 from typing import Any
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from db import (
     backend,
@@ -508,7 +507,7 @@ def format_price_level(raw: str | None) -> str:
 
 
 def inject_styles() -> None:
-    # st.html() on Streamlit Cloud does not run parent-document scripts — use components.html.
+    # st.html() on Streamlit Cloud does not run parent-document scripts — use st.iframe.
     css_literal = json.dumps(APRES_CSS)
     script = f"""<script>
     (function() {{
@@ -520,7 +519,7 @@ def inject_styles() -> None:
         doc.head.appendChild(el);
     }})();
     </script>"""
-    components.html(script, height=0, width=0)
+    st.iframe(script, height=0)
     # Fallback: styles widgets inside the app iframe when parent injection is blocked.
     st.markdown(f"<style>{APRES_CSS}</style>", unsafe_allow_html=True)
 
