@@ -91,7 +91,16 @@ def render_location_picker(*, borough: str) -> UserLocation | None:
             st.info("Geolocation component unavailable. Use map pick or coordinates.")
         else:
             st.caption("Tap the button below, then allow location access in your browser.")
-            loc = streamlit_geolocation(key="apres_date_geolocation")
+            loc = None
+            try:
+                # Package API: streamlit_geolocation() — no arguments (key is internal).
+                loc = streamlit_geolocation()
+            except Exception as exc:
+                st.warning(
+                    "Could not load geolocation widget. "
+                    "Use **Pick on map** or **Enter coordinates** instead."
+                )
+                st.caption(str(exc))
             if (
                 isinstance(loc, dict)
                 and loc.get("latitude") is not None
