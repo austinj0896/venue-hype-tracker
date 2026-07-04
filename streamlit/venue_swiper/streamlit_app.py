@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime, time, timedelta
+from html import escape
 from typing import Any
 
 import streamlit as st
@@ -362,7 +363,8 @@ h1, h2, h3 {{
     padding: 8px 0;
     letter-spacing: 0.04em;
 }}
-.date-plan-walk strong {{
+.date-plan-walk-time {{
+    font-weight: 600;
     color: var(--brown);
 }}
 .stars-preview {{
@@ -735,40 +737,60 @@ def get_ors_api_key() -> str | None:
     return os.environ.get("ORS_API_KEY") or None
 
 
-def format_walk_line(plan: DatePlan) -> str:
-    mi = plan.walk.distance_m / 1609.344
-    src = "walk" if plan.walk.source == "ors" else "est."
-    return f'<strong>{plan.walk.duration_min:.0f} min</strong> walk ({mi:.2f} mi, {src})'
+def format_scheduled_at(when: Any) -> str:
+    """12-hour display e.g. Fri Jul 4 at 7:00 PM."""
+    if when is None:
+        return "TBD"
+    if isinstance(when, str):
+        when = datetime.fromisoformat(when.replace("Z", "+00:00"))
+    if isinstance(when, datetime):
+        hour = when.strftime("%I").lstrip("0") or "12"
+        return f"{when.strftime('%a %b %d')} at {hour}:{when.strftime('%M %p')}"
+    return str(when)
+
+
+def hour_12_to_24(hour: int, ampm: str) -> int:
+    if ampm == "AM":
+        return 0 if hour == 12 else hour
+    return 12 if hour == 12 else hour + 12
 
 
 def render_date_stop(label: str, venue: dict, rating_stats: RatingLookup) -> str:
-    name = venue.get("PLACE_NAME") or "Unknown"
-    pt = (venue.get("PRIMARY_TYPE") or "").replace("_", " ")
-    addr = venue.get("SHORT_FORMATTED_ADDRESS") or venue.get("FORMATTED_ADDRESS") or ""
+    name = escape(venue.get("PLACE_NAME") or "Unknown")
+    pt = escape((venue.get("PRIMARY_TYPE") or "").replace("_", " "))
+    addr = escape(venue.get("SHORT_FORMATTED_ADDRESS") or venue.get("FORMATTED_ADDRESS") or "")
     pid = str(venue.get("GOOGLE_PLACE_ID") or "")
-    badge = rating_badge_label(rating_stats.get(pid))
-    return f"""
-    <div class="date-plan-stop">
-        <div class="date-plan-stop-num">{label}</div>
-        <div class="date-plan-stop-name">{name}</div>
-        <div class="date-plan-stop-meta">{pt} &middot; {addr}</div>
-        <div class="date-plan-stop-meta" style="color:var(--gold);margin-top:2px;">{badge}</div>
-    </div>
-    """
+    badge = escape(rating_badge_label(rating_stats.get(pid)))
+    label_safe = escape(label)
+    # Single-line HTML — indented lines inside st.markdown become code blocks.
+    return (
+        f'<div class="date-plan-stop">'
+        f'<div class="date-plan-stop-num">{label_safe}</div>'
+        f'<div class="date-plan-stop-name">{name}</div>'
+        f'<div class="date-plan-stop-meta">{pt} &middot; {addr}</div>'
+        f'<div class="date-plan-stop-meta" style="color:var(--gold);margin-top:2px;">{badge}</div>'
+        f"</div>"
+    )
 
 
 def render_date_plan_card(plan: DatePlan, rating_stats: RatingLookup) -> None:
-    st.markdown(
-        f"""
-        <div class="date-plan-card">
-            <div class="date-plan-header">{plan.combo.label}</div>
-            {render_date_stop(f"1 · {plan.combo.first_label}", plan.first_stop, rating_stats)}
-            <div class="date-plan-walk">{format_walk_line(plan)}</div>
-            {render_date_stop(f"2 · {plan.combo.second_label}", plan.second_stop, rating_stats)}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    walk_mins = f"{plan.walk.duration_min:.0f}"
+    mi = plan.walk.distance_m / 1609.344
+    src = "walk" if plan.walk.source == "ors" else "est."
+    header = escape(plan.combo.label)
+    stop1 = render_date_stop(f"1 · {plan.combo.first_label}", plan.first_stop, rating_stats)
+    stop2 = render_date_stop(f"2 · {plan.combo.second_label}", plan.second_stop, rating_stats)
+    html = (
+        f'<div class="date-plan-card">'
+        f'<div class="date-plan-header">{header}</div>'
+        f"{stop1}"
+        f'<div class="date-plan-walk">'
+        f'<span class="date-plan-walk-time">{walk_mins} min</span> walk ({mi:.2f} mi, {src})'
+        f"</div>"
+        f"{stop2}"
+        f"</div>"
     )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def _build_nearby_venue_pool(
@@ -806,23 +828,20 @@ def render_planned_dates_list(email: str) -> None:
         return
 
     for row in rows:
-        when = row.get("SCHEDULED_AT")
-        when_label = str(when)[:16] if when else "TBD"
-        stop1 = row.get("STOP1_PLACE_NAME") or "Stop 1"
-        stop2 = row.get("STOP2_PLACE_NAME") or "Stop 2"
-        combo = row.get("COMBO_LABEL") or "Date"
+        when_label = format_scheduled_at(row.get("SCHEDULED_AT"))
+        stop1 = escape(row.get("STOP1_PLACE_NAME") or "Stop 1")
+        stop2 = escape(row.get("STOP2_PLACE_NAME") or "Stop 2")
+        combo = escape(row.get("COMBO_LABEL") or "Date")
         walk = row.get("WALK_DURATION_MIN")
         walk_txt = f"{float(walk):.0f} min walk" if walk is not None else ""
-        borough = row.get("BOROUGH") or ""
+        borough = escape(row.get("BOROUGH") or "")
         meta = " · ".join(p for p in [when_label, borough, walk_txt] if p)
         st.markdown(
-            f"""
-            <div class="bucket-card">
-                <div class="bucket-title">{combo}</div>
-                <div class="bucket-sub">{stop1} → {stop2}</div>
-                <div class="bucket-sub">{meta}</div>
-            </div>
-            """,
+            f'<div class="bucket-card">'
+            f'<div class="bucket-title">{combo}</div>'
+            f'<div class="bucket-sub">{stop1} → {stop2}</div>'
+            f'<div class="bucket-sub">{meta}</div>'
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -909,15 +928,38 @@ def render_date_draft_editor(
 
     st.markdown('<div class="section-label">Schedule it</div>', unsafe_allow_html=True)
     default_day = date.today() + timedelta(days=1)
-    default_time = time(19, 0)
 
     with st.form("plan_date_form", clear_on_submit=False):
         sched_date = st.date_input("Date", value=default_day)
-        sched_time = st.time_input("Time", value=default_time)
+        col_h, col_m, col_ampm = st.columns(3)
+        with col_h:
+            sched_hour = st.selectbox(
+                "Hour",
+                options=list(range(1, 13)),
+                index=6,
+                format_func=lambda h: f"{h}:00",
+            )
+        with col_m:
+            sched_minute = st.selectbox(
+                "Minute",
+                options=[0, 15, 30, 45],
+                index=0,
+                format_func=lambda m: f":{m:02d}",
+            )
+        with col_ampm:
+            sched_ampm = st.selectbox("AM / PM", options=["AM", "PM"], index=1)
+        preview = datetime.combine(
+            sched_date,
+            time(hour_12_to_24(sched_hour, sched_ampm), sched_minute),
+        )
+        st.caption(f"Scheduled for {format_scheduled_at(preview)}")
         submitted = st.form_submit_button("Plan date", type="primary", use_container_width=True)
 
     if submitted:
-        scheduled_at = datetime.combine(sched_date, sched_time)
+        scheduled_at = datetime.combine(
+            sched_date,
+            time(hour_12_to_24(sched_hour, sched_ampm), sched_minute),
+        )
         try:
             save_planned_date(
                 email=email,
@@ -932,7 +974,7 @@ def render_date_draft_editor(
             )
             fetch_planned_dates.clear()
             st.session_state.pop("date_draft", None)
-            st.toast(f"Saved for {scheduled_at.strftime('%a %b %d at %I:%M %p')}")
+            st.toast(f"Saved for {format_scheduled_at(scheduled_at)}")
             st.rerun()
         except Exception as exc:
             st.error(
