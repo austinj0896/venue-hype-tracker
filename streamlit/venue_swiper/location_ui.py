@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import streamlit as st
-import streamlit.components.v1 as components
+
+try:
+    from streamlit_geolocation import streamlit_geolocation
+
+    HAS_GEOLOCATION = True
+except ImportError:
+    HAS_GEOLOCATION = False
 
 try:
     from streamlit_folium import st_folium
@@ -37,49 +42,6 @@ class UserLocation:
     lat: float
     lon: float
     source: str  # geolocation | map | manual
-
-
-_GEOLOCATION_HTML = """
-<div id="geo-status" style="font-size:12px;color:#7A5B48;margin-bottom:4px;">
-  Tap the button to share your location (browser permission required).
-</div>
-<button id="geo-btn" style="
-  background:#704D3B;color:#F8E6D2;border:none;border-radius:8px;
-  padding:8px 16px;font-size:13px;cursor:pointer;width:100%;
-">Use my location</button>
-<script>
-(function() {
-  const btn = document.getElementById("geo-btn");
-  const status = document.getElementById("geo-status");
-  btn.onclick = function() {
-    status.textContent = "Requesting location…";
-    if (!navigator.geolocation) {
-      status.textContent = "Geolocation not supported in this browser.";
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      function(pos) {
-        const payload = {
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-          source: "geolocation"
-        };
-        status.textContent = "Location received ✓";
-        window.parent.postMessage({
-          isStreamlitMessage: true,
-          type: "streamlit:setComponentValue",
-          value: payload
-        }, "*");
-      },
-      function(err) {
-        status.textContent = "Location denied or unavailable: " + err.message;
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
-    );
-  };
-})();
-</script>
-"""
 
 
 def borough_center(borough: str) -> tuple[float, float]:
@@ -121,17 +83,26 @@ def render_location_picker(*, borough: str) -> UserLocation | None:
         options=["Use my location", "Pick on map", "Enter coordinates"],
         horizontal=False,
         label_visibility="collapsed",
+        key="date_location_mode",
     )
 
     if mode == "Use my location":
-        geo_result = components.html(_GEOLOCATION_HTML, height=90)
-        if isinstance(geo_result, dict) and geo_result.get("lat") is not None:
-            save_location(
-                geo_result["lat"],
-                geo_result["lon"],
-                geo_result.get("source", "geolocation"),
-            )
-            saved = get_saved_location()
+        if not HAS_GEOLOCATION:
+            st.info("Geolocation component unavailable. Use map pick or coordinates.")
+        else:
+            st.caption("Tap the button below, then allow location access in your browser.")
+            loc = streamlit_geolocation(key="apres_date_geolocation")
+            if (
+                isinstance(loc, dict)
+                and loc.get("latitude") is not None
+                and loc.get("longitude") is not None
+            ):
+                save_location(
+                    float(loc["latitude"]),
+                    float(loc["longitude"]),
+                    "geolocation",
+                )
+                saved = get_saved_location()
 
     elif mode == "Pick on map":
         if not HAS_FOLIUM:
