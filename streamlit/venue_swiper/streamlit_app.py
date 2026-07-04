@@ -509,7 +509,8 @@ def format_price_level(raw: str | None) -> str:
 def inject_styles() -> None:
     # st.html() on Streamlit Cloud does not run parent-document scripts — use st.iframe.
     css_literal = json.dumps(APRES_CSS)
-    script = f"""<script>
+    script = f"""<!DOCTYPE html><html><head></head><body style="margin:0;padding:0;">
+    <script>
     (function() {{
         const doc = window.parent.document;
         if (doc.getElementById("apres-styles")) return;
@@ -518,8 +519,8 @@ def inject_styles() -> None:
         el.textContent = {css_literal};
         doc.head.appendChild(el);
     }})();
-    </script>"""
-    st.iframe(script, height=0)
+    </script></body></html>"""
+    st.iframe(script, height="content", tab_index=-1)
     # Fallback: styles widgets inside the app iframe when parent injection is blocked.
     st.markdown(f"<style>{APRES_CSS}</style>", unsafe_allow_html=True)
 
