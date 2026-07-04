@@ -367,6 +367,54 @@ h1, h2, h3 {{
     font-weight: 600;
     color: var(--brown);
 }}
+.location-mode-row div[data-testid="stRadio"] > div {{
+    flex-direction: row;
+    gap: 0.35rem;
+}}
+.location-mode-row div[data-testid="stRadio"] label {{
+    background: white;
+    border: 0.5px solid rgba(112,77,59,0.14);
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem !important;
+    font-size: 12px !important;
+    letter-spacing: 0.04em;
+    text-transform: none !important;
+    color: var(--text-mid) !important;
+}}
+.location-mode-row div[data-testid="stRadio"] label[data-checked="true"] {{
+    background: var(--brown);
+    border-color: var(--brown);
+    color: var(--cream) !important;
+}}
+.location-set-pill {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: white;
+    border: 0.5px solid rgba(112,77,59,0.12);
+    border-radius: 999px;
+    padding: 0.45rem 0.9rem;
+    font-size: 12px;
+    color: var(--text-mid);
+    letter-spacing: 0.03em;
+    margin: 0.15rem 0 0.85rem;
+}}
+.location-set-pill strong {{
+    color: var(--brown);
+    font-weight: 500;
+}}
+.location-set-dot {{
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--gold);
+    display: inline-block;
+}}
+iframe[title="streamlit_folium.streamlit_folium"] {{
+    border-radius: 16px !important;
+    border: 0.5px solid rgba(112,77,59,0.14) !important;
+    box-shadow: 0 8px 24px rgba(44,26,16,0.06);
+}}
 .stars-preview {{
     font-family: {FONT_SERIF};
     font-size: 22px;
@@ -1008,7 +1056,7 @@ def render_plan_date(email: str) -> None:
 
     location = render_location_picker(borough=borough)
     if not location:
-        st.info("Set a starting point above to find a date.")
+        st.info("Choose **Near me** or drop a pin on the map to get started.")
         render_planned_dates_list(email)
         return
 
