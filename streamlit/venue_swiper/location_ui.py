@@ -136,9 +136,7 @@ def render_location_picker(*, borough: str) -> UserLocation | None:
     st.markdown("</div>", unsafe_allow_html=True)
 
     if mode == MODE_NEAR_ME:
-        st.markdown('<div class="location-geo-wrap">', unsafe_allow_html=True)
         loc = apres_geolocation(key="apres_share_location")
-        st.markdown("</div>", unsafe_allow_html=True)
         if (
             isinstance(loc, dict)
             and loc.get("latitude") is not None
