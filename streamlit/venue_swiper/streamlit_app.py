@@ -9,9 +9,17 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import date, datetime, time, timedelta
 from html import escape
+from pathlib import Path
 from typing import Any
+
+# Streamlit Cloud can resolve sibling imports from site-packages first;
+# keep this app directory at the front of sys.path.
+_APP_DIR = Path(__file__).resolve().parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
 
 import streamlit as st
 
