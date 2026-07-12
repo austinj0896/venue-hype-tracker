@@ -23,6 +23,7 @@ from db import (
     ratings_table,
     run_query,
     upsert_rating,
+    venue_tags_table,
 )
 from date_planner import (
     DATE_COMBOS,
@@ -165,7 +166,7 @@ h1, h2, h3 {{
     position: relative;
     overflow: hidden;
     margin-bottom: 0.75rem;
-    min-height: 240px;
+    min-height: 280px;
 }}
 .date-card::before {{
     content: '';
@@ -174,6 +175,7 @@ h1, h2, h3 {{
     width: 140px; height: 140px;
     border-radius: 50%;
     background: rgba(211,163,69,0.12);
+    pointer-events: none;
 }}
 .date-card::after {{
     content: '';
@@ -182,6 +184,7 @@ h1, h2, h3 {{
     width: 80px; height: 80px;
     border-radius: 50%;
     background: rgba(248,230,210,0.05);
+    pointer-events: none;
 }}
 .date-card-label {{
     font-size: 10px;
@@ -222,6 +225,153 @@ h1, h2, h3 {{
     text-transform: uppercase;
     color: var(--sage);
 }}
+.vibe-rail {{
+    position: relative;
+    margin: 0.15rem 0 1rem;
+    padding-top: 0.55rem;
+}}
+.vibe-rail::before {{
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 1px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(211,163,69,0.55) 18%,
+        rgba(248,230,210,0.35) 52%,
+        rgba(211,163,69,0.45) 82%,
+        transparent 100%
+    );
+    pointer-events: none;
+}}
+.vibe-rail-label {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 0.55rem;
+}}
+.vibe-rail-label::after {{
+    content: '';
+    display: inline-block;
+    width: 18px;
+    height: 1px;
+    background: var(--gold);
+    opacity: 0.7;
+}}
+.vibe-tags {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    overflow: visible;
+    padding-top: 0.25rem;
+}}
+.vibe-tag {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    position: relative;
+    padding: 0.38rem 0.72rem 0.4rem;
+    border-radius: 999px 999px 999px 10px;
+    font-family: {FONT_SERIF};
+    font-style: italic;
+    font-size: 13px;
+    line-height: 1.1;
+    color: var(--cream);
+    cursor: default;
+    background:
+        linear-gradient(145deg, rgba(211,163,69,0.42) 0%, rgba(211,163,69,0.14) 55%, rgba(248,230,210,0.08) 100%);
+    border: 1px solid rgba(211,163,69,0.62);
+    box-shadow:
+        inset 0 1px 0 rgba(248,230,210,0.18),
+        0 6px 16px rgba(44,26,16,0.22);
+    animation: vibe-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+    transform-origin: left center;
+    transition:
+        transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 0.22s ease,
+        border-color 0.22s ease,
+        background 0.22s ease,
+        color 0.22s ease;
+    z-index: 1;
+}}
+.vibe-tag::before {{
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 8px rgba(211,163,69,0.85);
+    flex-shrink: 0;
+    transition: transform 0.22s ease, box-shadow 0.22s ease;
+}}
+.vibe-tag:hover,
+.vibe-tag:focus-visible {{
+    transform: translateY(-3px) scale(1.05);
+    z-index: 20;
+    border-color: rgba(248,230,210,0.75);
+    color: #FFF8EE;
+    background:
+        linear-gradient(145deg, rgba(211,163,69,0.78) 0%, rgba(211,163,69,0.38) 48%, rgba(248,230,210,0.14) 100%);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.22),
+        0 10px 28px rgba(44,26,16,0.38),
+        0 0 0 1px rgba(211,163,69,0.35),
+        0 0 22px rgba(211,163,69,0.45);
+}}
+.vibe-tag:hover::before,
+.vibe-tag:focus-visible::before {{
+    transform: scale(1.35);
+    box-shadow: 0 0 14px rgba(211,163,69,1);
+}}
+.vibe-tag-hot {{
+    background:
+        linear-gradient(145deg, rgba(211,163,69,0.72) 0%, rgba(211,163,69,0.28) 60%, rgba(112,77,59,0.35) 100%);
+    border-color: rgba(248,230,210,0.42);
+    color: #FFF8EE;
+}}
+.vibe-tag-hot:hover,
+.vibe-tag-hot:focus-visible {{
+    background:
+        linear-gradient(145deg, rgba(248,230,210,0.35) 0%, rgba(211,163,69,0.72) 42%, rgba(211,163,69,0.38) 100%);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.28),
+        0 12px 32px rgba(44,26,16,0.42),
+        0 0 0 1px rgba(248,230,210,0.25),
+        0 0 28px rgba(211,163,69,0.62);
+}}
+.vibe-tag:nth-child(1) {{ animation-delay: 0.04s; }}
+.vibe-tag:nth-child(2) {{ animation-delay: 0.09s; }}
+.vibe-tag:nth-child(3) {{ animation-delay: 0.14s; }}
+.vibe-tag:nth-child(4) {{ animation-delay: 0.19s; }}
+.vibe-tag:nth-child(5) {{ animation-delay: 0.24s; }}
+.vibe-tag:nth-child(6) {{ animation-delay: 0.29s; }}
+.vibe-tag:nth-child(7) {{ animation-delay: 0.34s; }}
+.vibe-tag:nth-child(8) {{ animation-delay: 0.39s; }}
+@keyframes vibe-rise {{
+    from {{
+        opacity: 0;
+        transform: translateY(10px) scale(0.94);
+        filter: blur(2px);
+    }}
+    to {{
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: none;
+    }}
+}}
+.vibe-empty {{
+    font-size: 11px;
+    font-style: italic;
+    color: rgba(248,230,210,0.38);
+    letter-spacing: 0.02em;
+}}
 .date-card-footer {{
     font-size: 12px;
     color: rgba(248,230,210,0.75);
@@ -230,10 +380,18 @@ h1, h2, h3 {{
     font-style: italic;
     line-height: 1.5;
     position: relative;
+    z-index: 3;
 }}
 .date-card-footer a {{
     color: var(--gold);
     text-decoration: none;
+    position: relative;
+    z-index: 3;
+    cursor: pointer;
+}}
+.date-card-footer a:hover {{
+    text-decoration: underline;
+    color: #F8E6D2;
 }}
 .swipe-hint {{
     text-align: center;
@@ -730,6 +888,61 @@ def fetch_next_venue(email: str, borough: str) -> dict[str, Any] | None:
 
 
 @st.cache_data(show_spinner=False)
+def fetch_venue_tags(google_place_id: str) -> list[dict[str, Any]]:
+    """Accepted vibe tags for a Discover card. Empty if table missing / untagged."""
+    if not google_place_id:
+        return []
+    sql = f"""
+        select tag, confidence, evidence, source
+        from {venue_tags_table()}
+        where google_place_id = ?
+        order by confidence desc nulls last, tag
+        limit 8
+    """
+    try:
+        return run_query(sql, [google_place_id])
+    except Exception:
+        return []
+
+
+def vibe_tags_html(tags: list[dict[str, Any]]) -> str:
+    if not tags:
+        return (
+            '<div class="vibe-rail">'
+            '<div class="vibe-rail-label">Vibes</div>'
+            '<div class="vibe-empty">Vibes still brewing for this spot</div>'
+            "</div>"
+        )
+
+    chips: list[str] = []
+    for row in tags:
+        label = escape(str(row.get("TAG") or "").strip())
+        if not label:
+            continue
+        try:
+            conf = float(row.get("CONFIDENCE") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        hot = " vibe-tag-hot" if conf >= 0.85 else ""
+        chips.append(f'<span class="vibe-tag{hot}">{label}</span>')
+
+    if not chips:
+        return (
+            '<div class="vibe-rail">'
+            '<div class="vibe-rail-label">Vibes</div>'
+            '<div class="vibe-empty">Vibes still brewing for this spot</div>'
+            "</div>"
+        )
+
+    return (
+        '<div class="vibe-rail">'
+        '<div class="vibe-rail-label">Vibes</div>'
+        f'<div class="vibe-tags">{"".join(chips)}</div>'
+        "</div>"
+    )
+
+
+@st.cache_data(show_spinner=False)
 def fetch_user_ratings(email: str, status: str | None = None) -> list[dict[str, Any]]:
     status_filter = ""
     params: list[Any] = [email]
@@ -1205,26 +1418,32 @@ def render_login() -> None:
         st.rerun()
 
 
-def render_venue_card(venue: dict[str, Any]) -> None:
-    name = venue.get("PLACE_NAME") or "Unknown venue"
+def render_venue_card(venue: dict[str, Any], tags: list[dict[str, Any]] | None = None) -> None:
+    name = escape(str(venue.get("PLACE_NAME") or "Unknown venue"))
     address = venue.get("SHORT_FORMATTED_ADDRESS") or venue.get("FORMATTED_ADDRESS") or ""
-    category = (venue.get("VENUE_CATEGORY") or venue.get("PRIMARY_TYPE") or "venue").replace("_", " ").title()
-    primary = (venue.get("PRIMARY_TYPE") or "").replace("_", " ")
+    category = escape(
+        (venue.get("VENUE_CATEGORY") or venue.get("PRIMARY_TYPE") or "venue").replace("_", " ").title()
+    )
+    primary = escape((venue.get("PRIMARY_TYPE") or "").replace("_", " "))
     price = format_price_level(venue.get("PRICE_LEVEL"))
     website = venue.get("WEBSITE_URI") or ""
+    place_id = str(venue.get("GOOGLE_PLACE_ID") or "")
+    if tags is None:
+        tags = fetch_venue_tags(place_id)
 
-    meta_parts = [p for p in [primary, address.split(",")[0] if address else ""] if p]
-    meta_line = " &middot; ".join(meta_parts[:2]) if meta_parts else address
+    meta_parts = [p for p in [primary, escape(address.split(",")[0]) if address else ""] if p]
+    meta_line = " &middot; ".join(meta_parts[:2]) if meta_parts else escape(str(address))
 
     pills = f"<span>{category}</span>"
     if price:
-        pills += f"<span>{price}</span>"
+        pills += f"<span>{escape(price)}</span>"
 
     footer_html = ""
     if website:
+        safe_url = escape(str(website), quote=True)
         footer_html = (
             f'<div class="date-card-footer">'
-            f'<a href="{website}" target="_blank">Website</a></div>'
+            f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer">Website</a></div>'
         )
 
     st.markdown(
@@ -1234,6 +1453,7 @@ def render_venue_card(venue: dict[str, Any]) -> None:
             <div class="date-card-title">{name}</div>
             <div class="date-card-meta">{meta_line}</div>
             <div class="date-card-pills">{pills}</div>
+            {vibe_tags_html(tags)}
             {footer_html}
         </div>
         """,
