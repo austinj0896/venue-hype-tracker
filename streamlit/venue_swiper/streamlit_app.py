@@ -31,6 +31,7 @@ from db import (
     ratings_table,
     run_query,
     upsert_rating,
+    venue_hours_table,
     venue_tags_table,
 )
 from date_planner import (
@@ -379,6 +380,37 @@ h1, h2, h3 {{
     font-style: italic;
     color: rgba(248,230,210,0.38);
     letter-spacing: 0.02em;
+}}
+.hours-rail {{
+    position: relative;
+    margin: 0 0 0.85rem;
+    padding: 0.55rem 0.7rem 0.65rem;
+    border-radius: 10px;
+    background: rgba(248,230,210,0.05);
+    border: 0.5px solid rgba(211,163,69,0.22);
+}}
+.hours-rail-label {{
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 0.35rem;
+}}
+.hours-today {{
+    font-size: 13px;
+    color: var(--cream);
+    margin-bottom: 0.35rem;
+    letter-spacing: 0.02em;
+}}
+.hours-today strong {{
+    color: var(--gold);
+    font-weight: 500;
+}}
+.hours-week {{
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(248,230,210,0.55);
+    white-space: pre-line;
 }}
 .date-card-footer {{
     font-size: 12px;
@@ -950,6 +982,105 @@ def vibe_tags_html(tags: list[dict[str, Any]]) -> str:
     )
 
 
+@st.cache_data(show_spinner=False, ttl=300)
+def fetch_venue_hours(google_place_id: str) -> dict[str, Any] | None:
+    """Hours of operation when available (ok/partial). None if missing/empty."""
+    if not google_place_id:
+        return None
+    sql = f"""
+        select hours_text, hours_json, status, confidence, source, timezone
+        from {venue_hours_table()}
+        where google_place_id = ?
+          and status in ('ok', 'partial')
+          and hours_text is not null
+          and trim(hours_text) <> ''
+        limit 1
+    """
+    try:
+        rows = run_query(sql, [google_place_id])
+    except Exception:
+        return None
+    return rows[0] if rows else None
+
+
+def _parse_hours_json(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _fmt_clock_24(hhmm: str) -> str:
+    try:
+        h, m = map(int, hhmm.split(":"))
+    except (TypeError, ValueError):
+        return hhmm
+    ampm = "AM" if h < 12 else "PM"
+    h12 = h % 12 or 12
+    return f"{h12}:{m:02d} {ampm}"
+
+
+def today_hours_summary(hours_row: dict[str, Any]) -> str:
+    """e.g. 'Open · 7:00 AM – 1:00 PM' or 'Closed today'."""
+    hours_json = _parse_hours_json(hours_row.get("HOURS_JSON"))
+    day_key = date.today().strftime("%A").lower()
+    periods = hours_json.get(day_key)
+    if periods is None and hours_json:
+        # Explicit null / missing → try text line for today
+        text = str(hours_row.get("HOURS_TEXT") or "")
+        for line in text.splitlines():
+            if line.lower().startswith(day_key[:3]) or line.lower().startswith(day_key):
+                body = line.split(":", 1)[-1].strip() if ":" in line else line
+                if re.search(r"(?i)closed", body):
+                    return "Closed today"
+                if body:
+                    return f"Today · {body}"
+        return "Hours on file"
+    if periods == [] or periods is None:
+        # Check text for Closed
+        text = str(hours_row.get("HOURS_TEXT") or "")
+        for line in text.splitlines():
+            if day_key in line.lower() and re.search(r"(?i)closed", line):
+                return "Closed today"
+        if periods is None:
+            return "Hours on file"
+        return "Closed today"
+    if isinstance(periods, list) and periods:
+        parts: list[str] = []
+        for p in periods:
+            if not isinstance(p, dict):
+                continue
+            o = _fmt_clock_24(str(p.get("open") or ""))
+            c = _fmt_clock_24(str(p.get("close") or ""))
+            if o and c:
+                parts.append(f"{o} – {c}")
+        if parts:
+            return f"Open · {' · '.join(parts)}"
+    return "Hours on file"
+
+
+def hours_html(hours_row: dict[str, Any] | None) -> str:
+    """Render hours block only when we have usable data."""
+    if not hours_row:
+        return ""
+    week = escape(str(hours_row.get("HOURS_TEXT") or "").strip())
+    if not week:
+        return ""
+    today = escape(today_hours_summary(hours_row))
+    return (
+        '<div class="hours-rail">'
+        '<div class="hours-rail-label">Hours</div>'
+        f'<div class="hours-today"><strong>{today}</strong></div>'
+        f'<div class="hours-week">{week}</div>'
+        "</div>"
+    )
+
+
 @st.cache_data(show_spinner=False)
 def fetch_user_ratings(email: str, status: str | None = None) -> list[dict[str, Any]]:
     status_filter = ""
@@ -1426,7 +1557,11 @@ def render_login() -> None:
         st.rerun()
 
 
-def render_venue_card(venue: dict[str, Any], tags: list[dict[str, Any]] | None = None) -> None:
+def render_venue_card(
+    venue: dict[str, Any],
+    tags: list[dict[str, Any]] | None = None,
+    hours: dict[str, Any] | None = None,
+) -> None:
     name = escape(str(venue.get("PLACE_NAME") or "Unknown venue"))
     address = venue.get("SHORT_FORMATTED_ADDRESS") or venue.get("FORMATTED_ADDRESS") or ""
     category = escape(
@@ -1438,6 +1573,8 @@ def render_venue_card(venue: dict[str, Any], tags: list[dict[str, Any]] | None =
     place_id = str(venue.get("GOOGLE_PLACE_ID") or "")
     if tags is None:
         tags = fetch_venue_tags(place_id)
+    if hours is None:
+        hours = fetch_venue_hours(place_id)
 
     meta_parts = [p for p in [primary, escape(address.split(",")[0]) if address else ""] if p]
     meta_line = " &middot; ".join(meta_parts[:2]) if meta_parts else escape(str(address))
@@ -1461,6 +1598,7 @@ def render_venue_card(venue: dict[str, Any], tags: list[dict[str, Any]] | None =
             <div class="date-card-title">{name}</div>
             <div class="date-card-meta">{meta_line}</div>
             <div class="date-card-pills">{pills}</div>
+            {hours_html(hours)}
             {vibe_tags_html(tags)}
             {footer_html}
         </div>

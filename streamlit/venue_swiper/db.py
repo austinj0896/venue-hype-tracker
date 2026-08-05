@@ -10,9 +10,11 @@ import streamlit as st
 DEFAULT_POSTGRES_PLACES = "places"
 DEFAULT_POSTGRES_RATINGS = "venue_ratings"
 DEFAULT_POSTGRES_TAGS = "venue_tags"
+DEFAULT_POSTGRES_HOURS = "venue_hours"
 DEFAULT_SF_DIM = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"
 DEFAULT_SF_RATINGS = "VENUE_HYPE.APP.VENUE_RATINGS"
 DEFAULT_SF_TAGS = "VENUE_HYPE.APP.VENUE_TAGS"
+DEFAULT_SF_HOURS = "VENUE_HYPE.APP.VENUE_HOURS"
 
 
 def backend() -> str:
@@ -98,6 +100,18 @@ def venue_tags_table() -> str:
         return str(st.secrets.get("app", {}).get("venue_tags_table", DEFAULT_SF_TAGS))
     except Exception:
         return DEFAULT_SF_TAGS
+
+
+def venue_hours_table() -> str:
+    if backend() == "postgres":
+        try:
+            return str(st.secrets.get("app", {}).get("venue_hours_table", DEFAULT_POSTGRES_HOURS))
+        except Exception:
+            return DEFAULT_POSTGRES_HOURS
+    try:
+        return str(st.secrets.get("app", {}).get("venue_hours_table", DEFAULT_SF_HOURS))
+    except Exception:
+        return DEFAULT_SF_HOURS
 
 
 def _to_upper_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
