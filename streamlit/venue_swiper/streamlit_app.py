@@ -1068,7 +1068,7 @@ def hours_html(hours_row: dict[str, Any] | None) -> str:
     """Render hours block only when we have usable data."""
     if not hours_row:
         return ""
-    week = escape(str(hours_row.get("HOURS_TEXT") or "").strip())
+    week = escape(str(hours_row.get("HOURS_TEXT") or "").strip()).replace("\n", "<br>")
     if not week:
         return ""
     today = escape(today_hours_summary(hours_row))
@@ -1591,20 +1591,20 @@ def render_venue_card(
             f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer">Website</a></div>'
         )
 
-    st.markdown(
-        f"""
-        <div class="date-card">
-            <div class="date-card-label">Up next</div>
-            <div class="date-card-title">{name}</div>
-            <div class="date-card-meta">{meta_line}</div>
-            <div class="date-card-pills">{pills}</div>
-            {hours_html(hours)}
-            {vibe_tags_html(tags)}
-            {footer_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    # Single-line HTML — indented lines inside st.markdown become code blocks
+    # (which is why vibe/hours markup was showing as raw text on Cloud).
+    html = (
+        f'<div class="date-card">'
+        f'<div class="date-card-label">Up next</div>'
+        f'<div class="date-card-title">{name}</div>'
+        f'<div class="date-card-meta">{meta_line}</div>'
+        f'<div class="date-card-pills">{pills}</div>'
+        f"{hours_html(hours)}"
+        f"{vibe_tags_html(tags)}"
+        f"{footer_html}"
+        f"</div>"
     )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def render_discover(email: str) -> None:
