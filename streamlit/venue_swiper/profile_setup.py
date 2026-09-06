@@ -751,29 +751,22 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Center preview modal in the viewport (Streamlit's fixed left offset breaks when we shrink width). */
-div[data-testid="stDialog"] > div[role="dialog"],
-div[data-testid="stModal"] > div[role="dialog"],
-[data-testid="stDialog"] section[role="dialog"],
-div[data-testid="stDialog"] div[role="dialog"] {
-    position: fixed !important;
-    left: 50% !important;
-    top: 50% !important;
-    right: auto !important;
-    bottom: auto !important;
-    inset: auto !important;
-    transform: translate(-50%, -50%) !important;
-    margin: 0 !important;
-    max-width: min(96vw, 400px) !important;
-    width: min(96vw, 400px) !important;
-    max-height: 94vh !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
-    padding: 0.65rem 0.55rem 0.75rem !important;
+/* Preview dialog: style only — never touch position/transform (that shoved the card off-screen). */
+div[data-testid="stDialog"],
+div[data-testid="stModal"],
+[data-testid="stDialog"] [role="dialog"],
+div[data-testid="stDialog"] > div {
+    max-width: min(96vw, 420px) !important;
+    max-height: 92vh !important;
+    box-sizing: border-box !important;
+}
+div[data-testid="stDialog"] [role="dialog"],
+div[data-testid="stDialog"] {
     background: #2C1A10 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
     color: #F8E6D2 !important;
-    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
 }
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
 div[data-testid="stDialog"] h2,
@@ -787,9 +780,10 @@ div[data-testid="stDialog"] button[aria-label="Close"] {
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"],
 div[data-testid="stDialog"] iframe {
     display: block !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
+    width: 100% !important;
     max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
 }
 .preview-chip {
     display: inline-flex;
