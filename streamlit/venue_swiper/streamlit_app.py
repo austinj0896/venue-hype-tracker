@@ -2181,7 +2181,7 @@ def render_login() -> None:
         title = "Create your account."
         hint = "A few taste questions come next, so Discover and dates fit you sooner."
 
-    mark = wordmark_path(variant="dark_sm") or wordmark_path(variant="light_sm")
+    mark = wordmark_path(variant="dark_sm")
     brand_col, tag_col = st.columns([1.15, 2])
     with brand_col:
         if mark is not None:

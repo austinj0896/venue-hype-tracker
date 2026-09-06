@@ -7,24 +7,33 @@ from functools import lru_cache
 from pathlib import Path
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
+_WORDMARK = _ASSETS / "apres_wordmark_dark.png"
+_WORDMARK_SM = _ASSETS / "apres_wordmark_dark_sm.png"
+# Kept as fallback if dark assets are missing.
 _WORDMARK_LIGHT = _ASSETS / "apres_wordmark_light.png"
-_WORDMARK_DARK = _ASSETS / "apres_wordmark_dark.png"
 _WORDMARK_LIGHT_SM = _ASSETS / "apres_wordmark_light_sm.png"
-_WORDMARK_DARK_SM = _ASSETS / "apres_wordmark_dark_sm.png"
 
 
-def wordmark_path(*, variant: str = "light") -> Path | None:
-    """Filesystem path for st.image (avoids huge base64 in the DOM)."""
+def wordmark_path(*, variant: str = "dark") -> Path | None:
+    """Filesystem path for st.image (avoids huge base64 in the DOM).
+
+    Prefer the dark metallic mark everywhere on cream UI.
+    """
     mapping = {
+        "dark": _WORDMARK,
+        "dark_sm": _WORDMARK_SM,
+        "hero": _WORDMARK,
+        "header": _WORDMARK_SM,
         "light": _WORDMARK_LIGHT,
-        "dark": _WORDMARK_DARK,
         "light_sm": _WORDMARK_LIGHT_SM,
-        "dark_sm": _WORDMARK_DARK_SM,
     }
-    path = mapping.get(variant)
-    if path is None or not path.is_file():
-        return None
-    return path
+    path = mapping.get(variant, _WORDMARK)
+    if path is not None and path.is_file():
+        return path
+    for fallback in (_WORDMARK, _WORDMARK_SM, _WORDMARK_LIGHT, _WORDMARK_LIGHT_SM):
+        if fallback.is_file():
+            return fallback
+    return None
 
 
 @lru_cache(maxsize=8)
@@ -36,24 +45,16 @@ def _data_uri(path: str, mime: str) -> str | None:
     return f"data:{mime};base64,{b64}"
 
 
-def brand_mark_html(*, size: str = "hero") -> str:
-    """HTML for the Après wordmark (prefer small assets in chrome).
-
-    size:
-      hero   — gold mark (prefer st.image via wordmark_path in splash)
-      header — compact dark mark for status bar
-    """
+def brand_mark_html(*, size: str = "header") -> str:
+    """HTML for the Après wordmark — dark metallic on cream."""
     if size == "hero":
-        uri = _data_uri(str(_WORDMARK_LIGHT_SM if _WORDMARK_LIGHT_SM.is_file() else _WORDMARK_LIGHT), "image/png")
+        path = wordmark_path(variant="dark")
         cls = "apres-brand-hero"
     else:
-        path = _WORDMARK_DARK_SM if _WORDMARK_DARK_SM.is_file() else _WORDMARK_DARK
-        uri = _data_uri(str(path), "image/png") or _data_uri(
-            str(_WORDMARK_LIGHT_SM if _WORDMARK_LIGHT_SM.is_file() else _WORDMARK_LIGHT),
-            "image/png",
-        )
+        path = wordmark_path(variant="dark_sm")
         cls = "apres-brand-header"
 
+    uri = _data_uri(str(path), "image/png") if path else None
     if uri:
         return f'<img class="{cls}" src="{uri}" alt="Après" />'
     return f'<div class="{cls} apres-brand-text">Après</div>'
