@@ -42,7 +42,8 @@ _SLIDES = (
 def onboarding_css() -> str:
     return """
 .ob-splash {
-    min-height: 58vh;
+    min-height: min(72dvh, 620px);
+    min-height: 72vh;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -57,6 +58,11 @@ def onboarding_css() -> str:
     border: 1px solid rgba(211, 163, 69, 0.18);
     box-shadow: 0 18px 40px rgba(44, 26, 16, 0.18);
     animation: apres-fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@supports (height: 1dvh) {
+    .ob-splash {
+        min-height: min(72dvh, 620px);
+    }
 }
 .ob-mark,
 .apres-brand-hero {

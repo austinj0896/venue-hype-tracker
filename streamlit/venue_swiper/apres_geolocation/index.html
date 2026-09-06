@@ -9,11 +9,11 @@
       padding: 0;
       background: transparent;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      min-height: 56px;
+      min-height: 64px;
     }
     .wrap {
       padding: 0;
-      min-height: 56px;
+      min-height: 64px;
     }
     button {
       width: 100%;
@@ -22,14 +22,16 @@
       background: #704D3B;
       color: #F8E6D2;
       border: none;
-      border-radius: 12px;
-      padding: 0.72rem 1rem;
-      font-size: 13px;
+      border-radius: 14px;
+      min-height: 48px;
+      padding: 0.85rem 1rem;
+      font-size: 15px;
       font-weight: 500;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.04em;
       cursor: pointer;
       transition: background 0.15s ease, transform 0.1s ease;
       box-shadow: 0 4px 14px rgba(44, 26, 16, 0.08);
+      -webkit-tap-highlight-color: rgba(211, 163, 69, 0.2);
     }
     button:hover:not(:disabled) {
       background: #5e4030;
@@ -49,11 +51,11 @@
     }
     .status {
       margin-top: 0.45rem;
-      font-size: 11px;
+      font-size: 12px;
       color: #B09080;
       text-align: center;
       letter-spacing: 0.04em;
-      min-height: 14px;
+      min-height: 16px;
     }
   </style>
 </head>
@@ -73,8 +75,8 @@
       );
     }
 
-    const FRAME_HEIGHT = 56;
-    const FRAME_HEIGHT_WITH_STATUS = 80;
+    const FRAME_HEIGHT = 64;
+    const FRAME_HEIGHT_WITH_STATUS = 92;
 
     function setFrameHeight(height) {
       send("streamlit:setFrameHeight", { height: height });

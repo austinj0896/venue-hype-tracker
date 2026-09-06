@@ -160,9 +160,12 @@ APRES_CSS = f"""
 html, body, [class*="css"] {{
     font-family: {FONT_SANS};
     color: var(--text-dark);
+    font-size: 16px;
+    line-height: 1.45;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    -webkit-tap-highlight-color: rgba(211, 163, 69, 0.18);
 }}
 .stApp {{
     background:
@@ -172,8 +175,10 @@ html, body, [class*="css"] {{
     background-attachment: fixed;
 }}
 .block-container {{
-    padding-top: var(--space-5);
-    padding-bottom: var(--space-8);
+    padding-top: calc(var(--space-5) + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(1rem + env(safe-area-inset-left, 0px));
+    padding-right: calc(1rem + env(safe-area-inset-right, 0px));
     max-width: 480px;
     animation: apres-page-in var(--dur-slow) var(--ease-out) both;
 }}
@@ -688,6 +693,17 @@ h1, h2, h3 {{
     background: linear-gradient(90deg, var(--gold), transparent);
     margin: 0 0 var(--space-3);
 }}
+.empty-state-action {{
+    display: block;
+    margin-top: var(--space-4);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: var(--brown);
+}}
+.empty-state-action span {{
+    color: var(--gold);
+}}
 .bucket-card {{
     background: var(--surface-solid);
     border-radius: var(--radius-md);
@@ -809,18 +825,22 @@ h1, h2, h3 {{
 }}
 .location-mode-row div[data-testid="stRadio"] > div {{
     flex-direction: row;
-    gap: 0.4rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
 }}
 .location-mode-row div[data-testid="stRadio"] label {{
     background: var(--surface-solid);
     border: 1px solid var(--hairline);
     border-radius: 999px;
-    padding: 0.4rem 0.9rem !important;
-    font-size: 12px !important;
-    letter-spacing: 0.04em;
+    min-height: 44px;
+    padding: 0.65rem 1.1rem !important;
+    font-size: 14px !important;
+    letter-spacing: 0.03em;
     text-transform: none !important;
     color: var(--text-mid) !important;
     box-shadow: var(--shadow-sm);
+    display: inline-flex !important;
+    align-items: center;
     transition:
         background var(--dur) var(--ease-inout),
         color var(--dur) var(--ease-inout),
@@ -829,7 +849,9 @@ h1, h2, h3 {{
 }}
 .location-mode-row div[data-testid="stRadio"] label:hover {{
     border-color: rgba(211, 163, 69, 0.35);
-    transform: translateY(-1px);
+}}
+.location-mode-row div[data-testid="stRadio"] label:active {{
+    transform: scale(0.98);
 }}
 .location-mode-row div[data-testid="stRadio"] label[data-checked="true"] {{
     background: var(--brown);
@@ -869,8 +891,8 @@ iframe[title="streamlit_folium.streamlit_folium"] {{
     box-shadow: var(--shadow-md);
 }}
 iframe[title="apres_geolocation.apres_geolocation"] {{
-    min-height: 56px !important;
-    height: 56px !important;
+    min-height: 64px !important;
+    height: 64px !important;
     width: 100% !important;
     border-radius: var(--radius-sm) !important;
     border: none !important;
@@ -879,27 +901,35 @@ iframe[title="apres_geolocation.apres_geolocation"] {{
 }}
 .stars-preview {{
     font-family: {FONT_SERIF};
-    font-size: 24px;
+    font-size: 26px;
     color: var(--gold);
     letter-spacing: 0.1em;
     text-align: center;
-    margin: 0.2rem 0 0.65rem;
+    margin: 0.2rem 0 0.85rem;
     transition: transform var(--dur-fast) var(--ease-spring);
 }}
 div[data-testid="stTabs"] {{
     margin-top: var(--space-2);
 }}
 div[data-testid="stTabs"] [data-baseweb="tab-list"] {{
-    gap: 0.15rem;
+    gap: 0.1rem;
     border-bottom: 1px solid var(--hairline);
     padding-bottom: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}}
+div[data-testid="stTabs"] [data-baseweb="tab-list"]::-webkit-scrollbar {{
+    display: none;
 }}
 div[data-testid="stTabs"] button {{
     font-family: {FONT_SANS} !important;
-    font-size: 12px !important;
+    font-size: 14px !important;
     font-weight: 500 !important;
-    letter-spacing: 0.06em !important;
+    letter-spacing: 0.03em !important;
     color: var(--text-light) !important;
+    min-height: 44px !important;
+    padding: 0.65rem 0.7rem !important;
     transition: color var(--dur) var(--ease-inout) !important;
 }}
 div[data-testid="stTabs"] button[aria-selected="true"] {{
@@ -914,9 +944,9 @@ div[data-testid="stForm"] label,
 div[data-testid="stTextInput"] label,
 div[data-testid="stSelectbox"] label,
 div[data-testid="stMultiSelect"] label {{
-    font-size: 10px !important;
+    font-size: 12px !important;
     font-weight: 500 !important;
-    letter-spacing: 0.12em !important;
+    letter-spacing: 0.1em !important;
     text-transform: uppercase !important;
     color: var(--text-light) !important;
 }}
@@ -927,6 +957,8 @@ div[data-testid="stMultiSelect"] > div > div {{
     border: 1px solid var(--hairline-strong) !important;
     background: var(--surface-solid) !important;
     color: var(--text-dark) !important;
+    font-size: 16px !important;
+    min-height: 44px !important;
     box-shadow: var(--shadow-sm);
     transition: border-color var(--dur) var(--ease-inout), box-shadow var(--dur) var(--ease-inout) !important;
 }}
@@ -939,14 +971,29 @@ div[data-testid="stBaseButton-primary"] button,
 div[data-testid="stFormSubmitButton"] button {{
     border-radius: var(--radius-md) !important;
     font-family: {FONT_SANS} !important;
+    font-size: 15px !important;
     font-weight: 500 !important;
-    letter-spacing: 0.05em !important;
+    letter-spacing: 0.04em !important;
+    min-height: 48px !important;
+    padding: 0.75rem 1rem !important;
     transition:
         transform var(--dur-fast) var(--ease-spring) !important,
         box-shadow var(--dur) var(--ease-inout) !important,
         background var(--dur) var(--ease-inout) !important,
         border-color var(--dur) var(--ease-inout) !important,
         filter var(--dur-fast) var(--ease-inout) !important;
+}}
+.apres-action-anchor + div[data-testid="stHorizontalBlock"] {{
+    position: sticky;
+    bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+    z-index: 50;
+    gap: 0.65rem !important;
+    margin-top: 0.35rem;
+    padding: 0.85rem 0.15rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
+    background:
+        linear-gradient(180deg, rgba(248, 230, 210, 0) 0%, rgba(248, 230, 210, 0.92) 28%, var(--cream) 100%);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
 }}
 div[data-testid="stBaseButton-secondary"] button {{
     background: rgba(255, 252, 247, 0.55) !important;
@@ -990,11 +1037,13 @@ div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(2) {{
 div[data-testid="stSlider"] [role="slider"] {{
     background: var(--brown) !important;
     border: 2px solid var(--cream) !important;
+    width: 24px !important;
+    height: 24px !important;
     box-shadow: 0 2px 8px rgba(44,26,16,0.22) !important;
     transition: transform var(--dur-fast) var(--ease-spring) !important;
 }}
 div[data-testid="stSlider"] [role="slider"]:active {{
-    transform: scale(1.08) !important;
+    transform: scale(1.12) !important;
 }}
 div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
     color: var(--brown) !important;
@@ -1096,6 +1145,27 @@ div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
     color: rgba(248, 230, 210, 0.68);
     margin: 0;
 }}
+@media (hover: none) {{
+    .bucket-card:hover,
+    .date-card:hover,
+    .date-plan-card:hover {{
+        transform: none;
+    }}
+    div[data-testid="stBaseButton-secondary"] button:hover,
+    div[data-testid="stBaseButton-primary"] button:hover,
+    div[data-testid="stFormSubmitButton"] button:hover {{
+        transform: none !important;
+        filter: none;
+    }}
+}}
+@media (min-width: 720px) {{
+    .block-container {{
+        padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom, 0px));
+    }}
+    html, body, [class*="css"] {{
+        font-size: 15px;
+    }}
+}}
 @media (prefers-reduced-motion: reduce) {{
     *, *::before, *::after {{
         animation-duration: 0.01ms !important;
@@ -1135,14 +1205,18 @@ def inject_styles() -> None:
     )
 
 
-def empty_state_html(*, eyebrow: str, title: str, body: str) -> str:
+def empty_state_html(*, eyebrow: str, title: str, body: str, action: str | None = None) -> str:
     """Designed empty state — single-line HTML for Streamlit markdown safety."""
+    action_html = (
+        f'<div class="empty-state-action">{action}</div>' if action else ""
+    )
     return (
         f'<div class="empty-state">'
         f'<div class="empty-state-eyebrow">{escape(eyebrow)}</div>'
         f'<div class="empty-state-title">{escape(title)}</div>'
         f'<div class="empty-state-mark"></div>'
         f"<p>{body}</p>"
+        f"{action_html}"
         f"</div>"
     )
 
@@ -1914,23 +1988,19 @@ def render_date_draft_editor(
 
     with st.form("plan_date_form", clear_on_submit=False):
         sched_date = st.date_input("Date", value=default_day)
-        col_h, col_m, col_ampm = st.columns(3)
-        with col_h:
-            sched_hour = st.selectbox(
-                "Hour",
-                options=list(range(1, 13)),
-                index=6,
-                format_func=lambda h: f"{h}:00",
-            )
-        with col_m:
-            sched_minute = st.selectbox(
-                "Minute",
-                options=[0, 15, 30, 45],
-                index=0,
-                format_func=lambda m: f":{m:02d}",
-            )
-        with col_ampm:
-            sched_ampm = st.selectbox("AM / PM", options=["AM", "PM"], index=1)
+        sched_hour = st.selectbox(
+            "Hour",
+            options=list(range(1, 13)),
+            index=6,
+            format_func=lambda h: f"{h}:00",
+        )
+        sched_minute = st.selectbox(
+            "Minute",
+            options=[0, 15, 30, 45],
+            index=0,
+            format_func=lambda m: f":{m:02d}",
+        )
+        sched_ampm = st.selectbox("AM / PM", options=["AM", "PM"], index=1)
         preview = datetime.combine(
             sched_date,
             time(hour_12_to_24(sched_hour, sched_ampm), sched_minute),
@@ -2004,27 +2074,24 @@ def render_plan_date(email: str) -> None:
     )
     combo = next(c for c in DATE_COMBOS if c.id == combo_id)
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        radius_mi = st.slider(
-            "Within this distance of you",
-            min_value=0.25,
-            max_value=2.0,
-            value=1.0,
-            step=0.25,
-            format="%.2f mi",
-            key="plan_radius_mi",
-        )
-    with col_b:
-        max_walk = st.slider(
-            "Max walk between stops",
-            min_value=5,
-            max_value=25,
-            value=15,
-            step=5,
-            format="%d min",
-            key="plan_max_walk",
-        )
+    radius_mi = st.slider(
+        "Within this distance of you",
+        min_value=0.25,
+        max_value=2.0,
+        value=1.0,
+        step=0.25,
+        format="%.2f mi",
+        key="plan_radius_mi",
+    )
+    max_walk = st.slider(
+        "Max walk between stops",
+        min_value=5,
+        max_value=25,
+        value=15,
+        step=5,
+        format="%d min",
+        key="plan_max_walk",
+    )
 
     ors_key = get_ors_api_key()
     if ors_key:
@@ -2247,8 +2314,9 @@ def render_discover(email: str) -> None:
                 title=f"{borough} is clear",
                 body=(
                     f"You cleared this area. Try another location, "
-                    f"or revisit <strong>My ratings</strong> and <strong>Skipped</strong>."
+                    f"or revisit <strong>Rated</strong> and <strong>Skipped</strong>."
                 ),
+                action='Open <span>Plan</span> when you’re ready for what’s next.',
             ),
             unsafe_allow_html=True,
         )
@@ -2291,6 +2359,7 @@ def render_discover(email: str) -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown('<div class="apres-action-anchor" aria-hidden="true"></div>', unsafe_allow_html=True)
     col_skip, col_rate = st.columns(2)
     with col_skip:
         if st.button("Skip", use_container_width=True, type="secondary"):
@@ -2352,6 +2421,7 @@ def render_rated_list(email: str) -> None:
                 eyebrow="My ratings",
                 title="Nothing rated yet",
                 body="Head to <strong>Discover</strong> and save your first score.",
+                action='Start in <span>Discover</span> — one place at a time.',
             ),
             unsafe_allow_html=True,
         )
@@ -2434,6 +2504,7 @@ def render_skipped_list(email: str) -> None:
                 eyebrow="Skipped",
                 title="A clean slate",
                 body="Nothing parked here yet. Skip from <strong>Discover</strong> when you haven’t been.",
+                action='Use <span>Skip</span> on Discover when you haven’t visited yet.',
             ),
             unsafe_allow_html=True,
         )
@@ -2536,14 +2607,12 @@ def main() -> None:
 
     if not complete:
         log_event("profile_setup", "Routing to profile setup wizard", email=email)
-        _, sign_out_col = st.columns([4, 1])
-        with sign_out_col:
-            if st.button("Sign out", type="secondary", use_container_width=True, key="setup_sign_out"):
-                clear_discover_venue()
-                st.session_state.pop("profile_draft", None)
-                st.session_state.pop("profile_setup_step", None)
-                del st.session_state["user_email"]
-                st.rerun()
+        if st.button("Sign out", type="secondary", use_container_width=True, key="setup_sign_out"):
+            clear_discover_venue()
+            st.session_state.pop("profile_draft", None)
+            st.session_state.pop("profile_setup_step", None)
+            del st.session_state["user_email"]
+            st.rerun()
         try:
             if not verify_data_access():
                 log_event("verify_data", "Data access failed during setup", level="error", email=email)
@@ -2577,16 +2646,14 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    _, sign_out_col = st.columns([4, 1])
-    with sign_out_col:
-        if st.button("Sign out", type="secondary", use_container_width=True):
-            clear_discover_venue()
-            st.session_state.pop("profile_draft", None)
-            st.session_state.pop("profile_setup_step", None)
-            st.session_state.pop(WELCOME_FLAG_KEY, None)
-            st.session_state.pop(WELCOME_NAME_KEY, None)
-            del st.session_state["user_email"]
-            st.rerun()
+    if st.button("Sign out", type="secondary", use_container_width=True, key="main_sign_out"):
+        clear_discover_venue()
+        st.session_state.pop("profile_draft", None)
+        st.session_state.pop("profile_setup_step", None)
+        st.session_state.pop(WELCOME_FLAG_KEY, None)
+        st.session_state.pop(WELCOME_NAME_KEY, None)
+        del st.session_state["user_email"]
+        st.rerun()
 
     try:
         if not verify_data_access():
@@ -2605,7 +2672,7 @@ def main() -> None:
 
     log_event("main_tabs", "Rendering main tabs", email=email)
     tab_discover, tab_plan, tab_rated, tab_skipped, tab_profile = st.tabs(
-        ["Discover", "Plan a date", "My ratings", "Skipped", "Profile"]
+        ["Discover", "Plan", "Rated", "Skipped", "Profile"]
     )
 
     with tab_discover:

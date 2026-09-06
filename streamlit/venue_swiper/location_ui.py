@@ -159,7 +159,7 @@ def render_location_picker(*, borough: str) -> UserLocation | None:
             map_data = st_folium(
                 make_apres_map(init_lat, init_lon),
                 width=None,
-                height=300,
+                height=360,
                 returned_objects=["last_clicked"],
             )
             clicked = (map_data or {}).get("last_clicked")

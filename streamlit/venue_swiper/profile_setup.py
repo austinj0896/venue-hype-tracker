@@ -171,14 +171,22 @@ def profile_setup_css() -> str:
     return """
 .profile-progress {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.45rem;
     margin: 0.5rem 0 1.35rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.15rem;
+    scrollbar-width: none;
+}
+.profile-progress::-webkit-scrollbar {
+    display: none;
 }
 .profile-step {
-    flex: 1;
-    min-width: 4.5rem;
-    padding: 0.65rem 0.45rem;
+    flex: 1 0 auto;
+    min-width: 5.25rem;
+    min-height: 44px;
+    padding: 0.7rem 0.55rem;
     border-radius: 12px;
     background: rgba(112,77,59,0.07);
     border: 1px solid rgba(112,77,59,0.1);
@@ -200,14 +208,14 @@ def profile_setup_css() -> str:
 }
 .profile-step-num {
     display: block;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     letter-spacing: 0.14em;
     color: #D3A345;
     margin-bottom: 0.2rem;
 }
 .profile-step-label {
-    font-size: 11px;
+    font-size: 12px;
     color: #704D3B;
     letter-spacing: 0.02em;
 }
@@ -308,11 +316,8 @@ def _render_step_about(draft: dict[str, Any]) -> None:
     st.markdown('<div class="section-label">About you</div>', unsafe_allow_html=True)
     _render_photo_picker(draft, key_prefix="pf")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        first = st.text_input("First name", value=draft.get("first_name") or "", key="pf_first")
-    with c2:
-        last = st.text_input("Last name", value=draft.get("last_name") or "", key="pf_last")
+    first = st.text_input("First name", value=draft.get("first_name") or "", key="pf_first")
+    last = st.text_input("Last name", value=draft.get("last_name") or "", key="pf_last")
 
     dob_val = draft.get("date_of_birth")
     if isinstance(dob_val, datetime):
