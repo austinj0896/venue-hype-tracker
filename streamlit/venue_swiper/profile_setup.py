@@ -20,12 +20,17 @@ from user_profiles_store import (
     is_profile_complete,
     list_profile_photos,
     photo_bytes,
+    photo_data_uri,
     prepare_profile_photo,
+    save_profile_photos,
     upsert_profile,
 )
 
 DRAFT_KEY = "profile_draft"
 STEP_KEY = "profile_setup_step"
+PREVIEW_OPEN_KEY = "apres_profile_preview_open"
+PREVIEW_IDX_KEY = "apres_preview_photo_idx"
+PROFILE_FLASH_KEY = "apres_profile_flash"
 
 
 def _empty_draft(email: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -104,13 +109,40 @@ def _neighbourhood_select(
     return st.selectbox(label, hoods, index=index, key=key)
 
 
+def _persist_photos_now(email: str, draft: dict[str, Any]) -> bool:
+    """Save gallery immediately (upload / reorder / unlink). Returns True on success."""
+    email_n = (email or draft.get("email") or "").strip()
+    if not email_n:
+        st.error("Missing email — can’t save photos.")
+        return False
+    try:
+        with st.spinner("Saving photos…"):
+            save_profile_photos(email_n, list(draft.get("photos") or []))
+            rows = list_profile_photos(email_n, include_bytes=True)
+        draft["photos"] = [
+            {
+                "PHOTO_ID": r.get("PHOTO_ID"),
+                "PHOTO_B64": r.get("PHOTO_B64"),
+                "PHOTO_MIME": r.get("PHOTO_MIME") or "image/jpeg",
+            }
+            for r in rows
+            if r.get("PHOTO_B64")
+        ]
+        draft["photos_changed"] = False
+        draft["photos_loaded"] = True
+        _save_draft(draft)
+        clear_profile_cache()
+        st.toast("Photos saved")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not save photos: {exc}")
+        return False
+
+
 def _hydrate_draft_photos(email: str, draft: dict[str, Any], profile: dict[str, Any] | None = None) -> None:
     """Load gallery into draft once (unless the user already edited photos this session)."""
     if draft.get("photos_loaded") or draft.get("photos_changed"):
         return
-    if not (profile or {}).get("HAS_PROFILE_PHOTO") and not draft.get("photos"):
-        # Still try list — covers gallery-only rows without legacy flag.
-        pass
     try:
         rows = list_profile_photos(email, include_bytes=True)
     except Exception:
@@ -130,12 +162,12 @@ def _hydrate_draft_photos(email: str, draft: dict[str, Any], profile: dict[str, 
     _save_draft(draft)
 
 
-def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
-    """Multi-photo gallery: up to MAX_PROFILE_PHOTOS, first is primary/avatar."""
+def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) -> None:
+    """Multi-photo gallery — changes persist immediately (no second Save needed)."""
     st.markdown("Photos (optional)")
     st.caption(
         f"Add up to {MAX_PROFILE_PHOTOS}. First photo is your main avatar. "
-        "Removing a photo unlinks it from your profile (admin can permanently delete later)."
+        "Changes save instantly. Remove only unlinks from your profile."
     )
 
     photos: list[dict[str, Any]] = list(draft.get("photos") or [])
@@ -153,8 +185,8 @@ def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
                     if i > 0 and st.button("↑", key=f"{key_prefix}_up_{i}", help="Move earlier"):
                         photos[i - 1], photos[i] = photos[i], photos[i - 1]
                         draft["photos"] = photos
-                        draft["photos_changed"] = True
                         _save_draft(draft)
+                        _persist_photos_now(email, draft)
                         st.rerun()
                 with b2:
                     if i < len(photos) - 1 and st.button(
@@ -162,16 +194,16 @@ def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
                     ):
                         photos[i + 1], photos[i] = photos[i], photos[i + 1]
                         draft["photos"] = photos
-                        draft["photos_changed"] = True
                         _save_draft(draft)
+                        _persist_photos_now(email, draft)
                         st.rerun()
                 with b3:
                     if st.button("✕", key=f"{key_prefix}_del_{i}", help="Remove from profile"):
                         photos.pop(i)
                         draft["photos"] = photos
-                        draft["photos_changed"] = True
                         draft.pop("_photo_upload_marker", None)
                         _save_draft(draft)
+                        _persist_photos_now(email, draft)
                         st.rerun()
 
     remaining = MAX_PROFILE_PHOTOS - len(photos)
@@ -184,9 +216,7 @@ def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
             label_visibility="collapsed",
         )
         if uploaded:
-            marker = "|".join(
-                f"{f.name}:{getattr(f, 'size', 0)}" for f in uploaded
-            )
+            marker = "|".join(f"{f.name}:{getattr(f, 'size', 0)}" for f in uploaded)
             if draft.get("_photo_upload_marker") != marker:
                 added = 0
                 errors: list[str] = []
@@ -201,17 +231,127 @@ def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
                     photos.append({"PHOTO_B64": b64, "PHOTO_MIME": mime})
                     added += 1
                 draft["photos"] = photos
-                draft["photos_changed"] = True
                 draft["_photo_upload_marker"] = marker
                 _save_draft(draft)
-                if added:
-                    st.caption(f"Added {added}. They’ll save with your profile.")
                 for err in errors[:3]:
                     st.error(err)
+                if added:
+                    _persist_photos_now(email, draft)
+                    st.rerun()
     else:
         st.caption("Photo limit reached — remove one to add another.")
 
     st.caption("JPG, PNG, or WebP · under 5 MB each · resized to fit.")
+
+
+def _age_from_dob(dob: Any) -> int | None:
+    if isinstance(dob, datetime):
+        dob = dob.date()
+    if not isinstance(dob, date):
+        return None
+    today = date.today()
+    years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    return years if 18 <= years <= 120 else years
+
+
+def _chips_html(items: list[str]) -> str:
+    bits = []
+    for item in items:
+        text = escape(str(item).strip())
+        if not text:
+            continue
+        bits.append(f'<span class="preview-chip">{text}</span>')
+    return "".join(bits)
+
+
+def render_profile_preview_card(
+    *,
+    first_name: str,
+    city: str,
+    neighbourhood: str,
+    dietary: list[str],
+    activities: list[str],
+    photos: list[dict[str, Any]],
+    date_of_birth: Any = None,
+) -> None:
+    """Dating-app style preview: photo stack + concise identity / taste."""
+    n = len(photos)
+    idx = int(st.session_state.get(PREVIEW_IDX_KEY, 0) or 0)
+    if n:
+        idx = max(0, min(n - 1, idx))
+    else:
+        idx = 0
+    st.session_state[PREVIEW_IDX_KEY] = idx
+
+    age = _age_from_dob(date_of_birth)
+    name = (first_name or "Member").strip() or "Member"
+    title = escape(name)
+    if age is not None:
+        title = f"{title}, {age}"
+
+    place_bits = [b for b in [(neighbourhood or "").strip(), (city or "").strip()] if b]
+    place = escape(" · ".join(place_bits)) if place_bits else "Somewhere great"
+
+    if n:
+        photo = photos[idx]
+        uri = photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME"))
+        img_html = (
+            f'<img class="preview-photo" src="{uri}" alt="" />'
+            if uri
+            else '<div class="preview-photo preview-photo-empty">No photo</div>'
+        )
+        segments = "".join(
+            f'<span class="preview-seg{" on" if i == idx else ""}"></span>' for i in range(n)
+        )
+        seg_html = f'<div class="preview-segments" aria-hidden="true">{segments}</div>'
+        count_html = f'<div class="preview-count">{idx + 1} / {n}</div>'
+    else:
+        img_html = '<div class="preview-photo preview-photo-empty">Add photos to fill this card</div>'
+        seg_html = ""
+        count_html = ""
+
+    diet_html = _chips_html([d for d in dietary if d and d != "None"]) or (
+        '<span class="preview-chip muted">Open to anything</span>'
+        if "None" in dietary or not dietary
+        else ""
+    )
+    act_html = _chips_html(list(activities)) or (
+        '<span class="preview-chip muted">Still figuring it out</span>'
+    )
+
+    st.markdown(
+        f"""
+        <div class="preview-card">
+          <div class="preview-photo-stage">
+            {seg_html}
+            {img_html}
+            {count_html}
+          </div>
+          <div class="preview-body">
+            <div class="preview-eyebrow">How others see you</div>
+            <div class="preview-name">{title}</div>
+            <div class="preview-place">{place}</div>
+            <div class="preview-group-label">Into</div>
+            <div class="preview-chips">{act_html}</div>
+            <div class="preview-group-label">Dietary</div>
+            <div class="preview-chips">{diet_html}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if n > 1:
+        left, right = st.columns(2)
+        with left:
+            if st.button("‹  Previous photo", use_container_width=True, key="preview_prev"):
+                st.session_state[PREVIEW_IDX_KEY] = (idx - 1) % n
+                st.rerun()
+        with right:
+            if st.button("Next photo  ›", use_container_width=True, key="preview_next"):
+                st.session_state[PREVIEW_IDX_KEY] = (idx + 1) % n
+                st.rerun()
+    st.caption("Tap previous / next to flip through photos — same idea as Tinder or Bumble.")
 
 
 def _progress_html(step: int, total: int = 4) -> str:
@@ -326,6 +466,122 @@ def profile_setup_css() -> str:
     gap: 0.85rem;
     margin: 0 0 0.25rem 0;
 }
+.preview-card {
+    background:
+        linear-gradient(165deg, rgba(211,163,69,0.18) 0%, transparent 38%),
+        linear-gradient(180deg, #7A5643 0%, #704D3B 55%, #5E3F31 100%);
+    border-radius: 22px;
+    border: 1px solid rgba(248, 230, 210, 0.1);
+    box-shadow: 0 4px 8px rgba(44,26,16,0.05), 0 24px 48px rgba(44,26,16,0.14),
+        inset 0 1px 0 rgba(248,230,210,0.1);
+    overflow: hidden;
+    margin: 0.35rem 0 0.85rem;
+    animation: apres-card-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.preview-photo-stage {
+    position: relative;
+    background: #2C1A10;
+    min-height: 340px;
+}
+.preview-photo {
+    width: 100%;
+    height: min(62vh, 420px);
+    object-fit: cover;
+    display: block;
+}
+.preview-photo-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 280px;
+    color: rgba(248,230,210,0.55);
+    font-size: 15px;
+    padding: 1.5rem;
+    text-align: center;
+}
+.preview-segments {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    display: flex;
+    gap: 4px;
+    z-index: 2;
+}
+.preview-seg {
+    flex: 1;
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(248,230,210,0.28);
+}
+.preview-seg.on {
+    background: #F8E6D2;
+    box-shadow: 0 0 0 1px rgba(211,163,69,0.35);
+}
+.preview-count {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 2;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: #F8E6D2;
+    background: rgba(44,26,16,0.45);
+    padding: 0.35rem 0.55rem;
+    border-radius: 999px;
+}
+.preview-body {
+    padding: 1.15rem 1.2rem 1.35rem;
+}
+.preview-eyebrow {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #D3A345;
+    margin: 0 0 0.45rem;
+}
+.preview-name {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: clamp(28px, 7vw, 34px);
+    font-weight: 500;
+    font-style: italic;
+    color: #F8E6D2;
+    line-height: 1.1;
+    margin: 0 0 0.35rem;
+}
+.preview-place {
+    font-size: 14px;
+    color: rgba(248,230,210,0.72);
+    margin: 0 0 1rem;
+}
+.preview-group-label {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(248,230,210,0.45);
+    margin: 0.65rem 0 0.4rem;
+}
+.preview-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+.preview-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(248,230,210,0.1);
+    border: 1px solid rgba(248,230,210,0.14);
+    color: #F8E6D2;
+    font-size: 13px;
+}
+.preview-chip.muted {
+    color: rgba(248,230,210,0.55);
+    font-style: italic;
+}
 """
 
 
@@ -377,8 +633,9 @@ def _nav(back: bool = True, next_label: str = "Continue", next_key: str = "profi
 
 def _render_step_about(draft: dict[str, Any]) -> None:
     st.markdown('<div class="section-label">About you</div>', unsafe_allow_html=True)
-    _hydrate_draft_photos(str(draft.get("email") or ""), draft, None)
-    _render_photo_picker(draft, key_prefix="pf")
+    email = str(draft.get("email") or "")
+    _hydrate_draft_photos(email, draft, None)
+    _render_photo_picker(email, draft, key_prefix="pf")
 
     first = st.text_input("First name", value=draft.get("first_name") or "", key="pf_first")
     last = st.text_input("Last name", value=draft.get("last_name") or "", key="pf_last")
@@ -575,13 +832,77 @@ PROFILE_FLASH_KEY = "apres_profile_flash"
 
 def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     """Edit surface for users who already completed basic setup."""
-    st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
-    st.caption("Update your taste profile anytime. Ratings and plans stay as they are.")
     st.markdown(f"<style>{profile_setup_css()}</style>", unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
+    st.caption("Photos save as you go. Use preview to see what others would see.")
 
     flash = st.session_state.pop(PROFILE_FLASH_KEY, None)
     if flash:
         st.success(flash)
+
+    draft = _get_draft(email, profile)
+    _hydrate_draft_photos(email, draft, profile)
+
+    preview_open = bool(st.session_state.get(PREVIEW_OPEN_KEY))
+    toggle_cols = st.columns([1, 1])
+    with toggle_cols[0]:
+        if preview_open:
+            if st.button("Close preview", use_container_width=True, key="preview_close"):
+                st.session_state[PREVIEW_OPEN_KEY] = False
+                st.rerun()
+        else:
+            if st.button(
+                "Preview as others see you",
+                type="primary",
+                use_container_width=True,
+                key="preview_open",
+            ):
+                st.session_state[PREVIEW_OPEN_KEY] = True
+                st.session_state[PREVIEW_IDX_KEY] = 0
+                st.rerun()
+
+    if preview_open:
+        # Prefer live form values when present (from prior run / current widgets).
+        first_live = str(st.session_state.get("edit_first") or draft.get("first_name") or profile.get("FIRST_NAME") or "")
+        city_live = str(
+            st.session_state.get("edit_city")
+            or draft.get("city_choice")
+            or profile.get("CITY")
+            or ""
+        )
+        hood_key = f"edit_hood_{city_live}" if city_live else None
+        hood_live = str(
+            (st.session_state.get(hood_key) if hood_key else None)
+            or draft.get("neighbourhood")
+            or profile.get("NEIGHBOURHOOD")
+            or ""
+        )
+        dietary_live = list(
+            st.session_state.get("edit_dietary")
+            or draft.get("dietary_needs")
+            or profile.get("DIETARY_NEEDS")
+            or []
+        )
+        activities_live = list(
+            st.session_state.get("edit_activities")
+            or draft.get("activity_preferences")
+            or profile.get("ACTIVITY_PREFERENCES")
+            or []
+        )
+        dob_live = draft.get("date_of_birth") or profile.get("DATE_OF_BIRTH")
+        if st.session_state.get("edit_add_dob") and st.session_state.get("edit_dob"):
+            dob_live = st.session_state.get("edit_dob")
+
+        render_profile_preview_card(
+            first_name=first_live,
+            city=city_live,
+            neighbourhood=hood_live,
+            dietary=dietary_live,
+            activities=activities_live,
+            photos=list(draft.get("photos") or []),
+            date_of_birth=dob_live,
+        )
+        st.markdown("---")
 
     st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
     st.markdown(
@@ -595,9 +916,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
 
-    draft = _get_draft(email, profile)
-    _hydrate_draft_photos(email, draft, profile)
-    _render_photo_picker(draft, key_prefix="edit")
+    _render_photo_picker(email, draft, key_prefix="edit")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -661,7 +980,10 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
 
     if st.button("Save profile", type="primary", use_container_width=True, key="edit_save"):
         if not first.strip() or not last.strip() or not choice or not neighbourhood:
-            st.error("Name, city, and neighbourhood are required. If you changed city, pick a neighbourhood again.")
+            st.error(
+                "Name, city, and neighbourhood are required. "
+                "If you changed city, pick a neighbourhood again."
+            )
             return
         if not dietary:
             st.error("Select at least one dietary option (None is fine).")
