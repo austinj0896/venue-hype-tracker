@@ -47,10 +47,16 @@ from date_planner import (
 )
 from geo import filter_by_radius, miles_to_meters
 from location_ui import render_location_picker
+from app_log import log_event, show_recent_errors
 from places_data import fetch_community_ratings, fetch_venues_with_coords
 from profile_options import preferred_types_from_activities
 from profile_setup import render_profile_settings, render_profile_setup
-from user_profiles_store import fetch_profile, is_profile_complete, photo_data_uri
+from user_profiles_store import (
+    fetch_profile,
+    fetch_profile_photo,
+    is_profile_complete,
+    photo_data_uri,
+)
 from planned_dates_store import fetch_planned_dates, save_planned_date
 
 DEFAULT_BOROUGH = "Manhattan Beach"
@@ -1072,29 +1078,11 @@ def format_price_level(raw: str | None) -> str:
 
 
 def inject_styles() -> None:
-    # st.html() on Streamlit Cloud does not run parent-document scripts — use st.iframe.
-    css_literal = json.dumps(APRES_CSS)
-    font_literal = json.dumps(FONT_URL)
-    script = f"""<!DOCTYPE html><html><head></head><body style="margin:0;padding:0;">
-    <script>
-    (function() {{
-        const doc = window.parent.document;
-        if (!doc.getElementById("apres-fonts")) {{
-            const link = doc.createElement("link");
-            link.id = "apres-fonts";
-            link.rel = "stylesheet";
-            link.href = {font_literal};
-            doc.head.appendChild(link);
-        }}
-        if (doc.getElementById("apres-styles")) return;
-        const el = doc.createElement("style");
-        el.id = "apres-styles";
-        el.textContent = {css_literal};
-        doc.head.appendChild(el);
-    }})();
-    </script></body></html>"""
-    st.iframe(script, height="content", tab_index=-1)
-    # Fallback: styles widgets inside the app iframe when parent injection is blocked.
+    """Inject Après CSS without st.iframe.
+
+    An empty measuring iframe (height=\"content\") has hung mobile Safari /
+    Streamlit Cloud after form submit — keep styles in markdown only.
+    """
     st.markdown(
         f'<link rel="stylesheet" href="{FONT_URL}" />'
         f"<style>{APRES_CSS}</style>",
@@ -2083,6 +2071,7 @@ def render_login() -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+    show_recent_errors()
 
     with st.form("login_form", clear_on_submit=False):
         email_raw = st.text_input("Email", placeholder="you@example.com")
@@ -2090,11 +2079,19 @@ def render_login() -> None:
 
     if submitted:
         email = normalize_email(email_raw)
+        log_event("login_submit", "Continue pressed", email=email or None)
         if not is_valid_email(email):
+            log_event(
+                "login_invalid_email",
+                "Invalid email rejected",
+                level="warning",
+                email=email or None,
+            )
             st.error("Enter a valid email address.")
             return
         st.session_state["user_email"] = email
         clear_discover_venue()
+        log_event("login_ok", "Email accepted; entering app", email=email)
         st.rerun()
 
 
@@ -2442,17 +2439,42 @@ def render_skipped_list(email: str) -> None:
 
 
 def main() -> None:
-    inject_styles()
+    try:
+        inject_styles()
+    except Exception as exc:  # noqa: BLE001
+        log_event("inject_styles", "Style injection failed", level="error", exc=exc)
 
     if "user_email" not in st.session_state:
         render_login()
         return
 
     email = st.session_state["user_email"]
+    log_event("post_login", "Session has email; loading profile gate", email=email)
 
-    profile = fetch_profile(email)
-    if not is_profile_complete(profile):
-        # Existing raters without a complete profile still hit setup.
+    try:
+        profile = fetch_profile(email, include_photo=False)
+        log_event(
+            "fetch_profile",
+            "Profile loaded" if profile else "No profile row yet",
+            email=email,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_event("fetch_profile", "Profile fetch failed", level="error", email=email, exc=exc)
+        st.error("Couldn’t load your profile. Pull to refresh, or try again in a moment.")
+        show_recent_errors()
+        if st.button("Sign out", type="secondary", key="profile_fail_sign_out"):
+            del st.session_state["user_email"]
+            st.rerun()
+        return
+
+    try:
+        complete = is_profile_complete(profile)
+    except Exception as exc:  # noqa: BLE001
+        log_event("profile_complete_check", "Completeness check failed", level="error", email=email, exc=exc)
+        complete = False
+
+    if not complete:
+        log_event("profile_setup", "Routing to profile setup wizard", email=email)
         _, sign_out_col = st.columns([4, 1])
         with sign_out_col:
             if st.button("Sign out", type="secondary", use_container_width=True, key="setup_sign_out"):
@@ -2461,17 +2483,31 @@ def main() -> None:
                 st.session_state.pop("profile_setup_step", None)
                 del st.session_state["user_email"]
                 st.rerun()
-        if not verify_data_access():
-            return
-        render_profile_setup(email, profile)
+        try:
+            if not verify_data_access():
+                log_event("verify_data", "Data access failed during setup", level="error", email=email)
+                show_recent_errors()
+                return
+            render_profile_setup(email, profile)
+        except Exception as exc:  # noqa: BLE001
+            log_event("profile_setup_render", "Setup UI crashed", level="error", email=email, exc=exc)
+            st.error("Something went wrong loading profile setup.")
+            show_recent_errors()
         return
 
     first = (profile or {}).get("FIRST_NAME") or ""
     display_name = first or email.split("@")[0].replace(".", " ").title()
-    photo_uri = photo_data_uri(
-        (profile or {}).get("PROFILE_PHOTO_B64"),
-        (profile or {}).get("PROFILE_PHOTO_MIME"),
-    )
+    photo_uri = None
+    try:
+        if (profile or {}).get("HAS_PROFILE_PHOTO"):
+            photo_row = fetch_profile_photo(email)
+            if photo_row:
+                photo_uri = photo_data_uri(
+                    photo_row.get("PROFILE_PHOTO_B64"),
+                    photo_row.get("PROFILE_PHOTO_MIME"),
+                )
+    except Exception as exc:  # noqa: BLE001
+        log_event("fetch_photo", "Avatar load failed", level="warning", email=email, exc=exc)
 
     render_apres_header(f"Good evening, {display_name}.", photo_uri=photo_uri)
     st.markdown(
@@ -2490,30 +2526,67 @@ def main() -> None:
             del st.session_state["user_email"]
             st.rerun()
 
-    if not verify_data_access():
+    try:
+        if not verify_data_access():
+            log_event("verify_data", "Data access failed after login", level="error", email=email)
+            show_recent_errors()
+            return
+    except Exception as exc:  # noqa: BLE001
+        log_event("verify_data", "verify_data_access crashed", level="error", email=email, exc=exc)
+        st.error("Couldn’t reach the venue catalog.")
+        show_recent_errors()
         return
 
     if render_profile_welcome():
+        log_event("welcome", "Showing post-setup welcome", email=email)
         return
 
+    log_event("main_tabs", "Rendering main tabs", email=email)
     tab_discover, tab_plan, tab_rated, tab_skipped, tab_profile = st.tabs(
         ["Discover", "Plan a date", "My ratings", "Skipped", "Profile"]
     )
 
     with tab_discover:
-        render_discover(email)
+        try:
+            render_discover(email)
+        except Exception as exc:  # noqa: BLE001
+            log_event("discover", "Discover crashed", level="error", email=email, exc=exc)
+            st.error("Discover hit an error.")
+            show_recent_errors()
 
     with tab_plan:
-        render_plan_date(email)
+        try:
+            render_plan_date(email)
+        except Exception as exc:  # noqa: BLE001
+            log_event("plan", "Plan crashed", level="error", email=email, exc=exc)
+            st.error("Plan a date hit an error.")
+            show_recent_errors()
 
     with tab_rated:
-        render_rated_list(email)
+        try:
+            render_rated_list(email)
+        except Exception as exc:  # noqa: BLE001
+            log_event("rated", "Ratings list crashed", level="error", email=email, exc=exc)
+            st.error("My ratings hit an error.")
+            show_recent_errors()
 
     with tab_skipped:
-        render_skipped_list(email)
+        try:
+            render_skipped_list(email)
+        except Exception as exc:  # noqa: BLE001
+            log_event("skipped", "Skipped list crashed", level="error", email=email, exc=exc)
+            st.error("Skipped hit an error.")
+            show_recent_errors()
 
     with tab_profile:
-        render_profile_settings(email, profile or {})
+        try:
+            # Load photo only on Profile tab (heavy base64).
+            profile_full = fetch_profile(email, include_photo=True) or profile or {}
+            render_profile_settings(email, profile_full)
+        except Exception as exc:  # noqa: BLE001
+            log_event("profile_tab", "Profile tab crashed", level="error", email=email, exc=exc)
+            st.error("Profile hit an error.")
+            show_recent_errors()
 
 
 if __name__ == "__main__":

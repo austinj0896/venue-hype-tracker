@@ -27,49 +27,53 @@ def ensure_schema() -> None:
         return
     # Single statement — more reliable than multi-statement execute via psycopg2.
     table = user_profiles_table()
-    execute_write(
-        f"""
-        CREATE TABLE IF NOT EXISTS {table} (
-            user_email            TEXT PRIMARY KEY,
-            first_name            TEXT NOT NULL,
-            last_name             TEXT NOT NULL,
-            date_of_birth         DATE,
-            phone                 TEXT,
-            city                  TEXT NOT NULL,
-            neighbourhood         TEXT NOT NULL,
-            dietary_needs         TEXT[] NOT NULL DEFAULT '{{}}',
-            activity_preferences  TEXT[] NOT NULL DEFAULT '{{}}',
-            accepted_terms_at     TIMESTAMPTZ NOT NULL,
-            marketing_opt_in      BOOLEAN NOT NULL DEFAULT FALSE,
-            profile_complete      BOOLEAN NOT NULL DEFAULT FALSE,
-            profile_photo_b64     TEXT,
-            profile_photo_mime    TEXT,
-            created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """,
-        [],
-    )
-    for col_sql in (
-        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_b64 TEXT",
-        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_mime TEXT",
-    ):
-        try:
-            execute_write(col_sql, [])
-        except Exception:
-            pass
     try:
         execute_write(
-            f"CREATE INDEX IF NOT EXISTS idx_user_profiles_complete ON {table} (profile_complete)",
+            f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                user_email            TEXT PRIMARY KEY,
+                first_name            TEXT NOT NULL,
+                last_name             TEXT NOT NULL,
+                date_of_birth         DATE,
+                phone                 TEXT,
+                city                  TEXT NOT NULL,
+                neighbourhood         TEXT NOT NULL,
+                dietary_needs         TEXT[] NOT NULL DEFAULT '{{}}',
+                activity_preferences  TEXT[] NOT NULL DEFAULT '{{}}',
+                accepted_terms_at     TIMESTAMPTZ NOT NULL,
+                marketing_opt_in      BOOLEAN NOT NULL DEFAULT FALSE,
+                profile_complete      BOOLEAN NOT NULL DEFAULT FALSE,
+                profile_photo_b64     TEXT,
+                profile_photo_mime    TEXT,
+                created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
             [],
         )
-        execute_write(
-            f"CREATE INDEX IF NOT EXISTS idx_user_profiles_updated ON {table} (updated_at DESC)",
-            [],
-        )
+        for col_sql in (
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_b64 TEXT",
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_mime TEXT",
+        ):
+            try:
+                execute_write(col_sql, [])
+            except Exception:
+                pass
+        try:
+            execute_write(
+                f"CREATE INDEX IF NOT EXISTS idx_user_profiles_complete ON {table} (profile_complete)",
+                [],
+            )
+            execute_write(
+                f"CREATE INDEX IF NOT EXISTS idx_user_profiles_updated ON {table} (updated_at DESC)",
+                [],
+            )
+        except Exception:
+            pass
+        st.session_state[_SCHEMA_APPLIED_KEY] = True
     except Exception:
-        pass
-    st.session_state[_SCHEMA_APPLIED_KEY] = True
+        # Leave flag unset so the next request can retry.
+        raise
 
 
 def prepare_profile_photo(uploaded_file: Any) -> tuple[str, str]:
@@ -197,11 +201,17 @@ def compute_profile_complete_flag(payload: dict[str, Any]) -> bool:
 
 
 @st.cache_data(show_spinner=False, ttl=30)
-def fetch_profile(email: str) -> dict[str, Any] | None:
+def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | None:
+    """Load profile. Photo is opt-in — base64 blobs stall mobile after login."""
     if not email or backend() != "postgres":
         return None
     ensure_schema()
     table = user_profiles_table()
+    photo_cols = (
+        "profile_photo_b64, profile_photo_mime,"
+        if include_photo
+        else ""
+    )
     sql = f"""
         select
             user_email,
@@ -216,30 +226,90 @@ def fetch_profile(email: str) -> dict[str, Any] | None:
             accepted_terms_at,
             marketing_opt_in,
             profile_complete,
-            profile_photo_b64,
-            profile_photo_mime,
+            {photo_cols}
             created_at,
             updated_at
         from {table}
         where user_email = %s
         limit 1
     """
+    email_n = email.strip().lower()
     try:
-        rows = run_query(sql, [email.strip().lower()])
+        rows = run_query(sql, [email_n])
     except Exception:
         # Table may not exist yet on a fresh deploy — try schema once more.
         st.session_state.pop(_SCHEMA_APPLIED_KEY, None)
         try:
             ensure_schema()
-            rows = run_query(sql, [email.strip().lower()])
+            rows = run_query(sql, [email_n])
         except Exception:
             return None
-    return normalize_profile_row(rows[0] if rows else None)
+    row = normalize_profile_row(rows[0] if rows else None)
+    if row and not include_photo:
+        row["PROFILE_PHOTO_B64"] = None
+        row["PROFILE_PHOTO_MIME"] = None
+        row["HAS_PROFILE_PHOTO"] = _profile_has_photo(email_n)
+    return row
+
+
+def _profile_has_photo(email: str) -> bool:
+    """Cheap flag for avatar without loading base64."""
+    if backend() != "postgres":
+        return False
+    table = user_profiles_table()
+    try:
+        rows = run_query(
+            f"""
+            select 1 as ok
+            from {table}
+            where user_email = %s
+              and profile_photo_b64 is not null
+              and length(profile_photo_b64) > 0
+            limit 1
+            """,
+            [email],
+        )
+        return bool(rows)
+    except Exception:
+        return False
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def fetch_profile_photo(email: str) -> dict[str, str | None] | None:
+    if not email or backend() != "postgres":
+        return None
+    table = user_profiles_table()
+    try:
+        rows = run_query(
+            f"""
+            select profile_photo_b64, profile_photo_mime
+            from {table}
+            where user_email = %s
+            limit 1
+            """,
+            [email.strip().lower()],
+        )
+    except Exception:
+        return None
+    if not rows:
+        return None
+    row = rows[0]
+    b64 = row.get("PROFILE_PHOTO_B64")
+    if not b64:
+        return None
+    return {
+        "PROFILE_PHOTO_B64": b64,
+        "PROFILE_PHOTO_MIME": (row.get("PROFILE_PHOTO_MIME") or "").strip() or "image/jpeg",
+    }
 
 
 def clear_profile_cache() -> None:
     try:
         fetch_profile.clear()
+    except Exception:
+        pass
+    try:
+        fetch_profile_photo.clear()
     except Exception:
         pass
 
@@ -275,7 +345,7 @@ def upsert_profile(
     activities = [a.strip() for a in activity_preferences if str(a).strip()]
     phone_n = (phone or "").strip() or None
 
-    existing = fetch_profile(email_n)
+    existing = fetch_profile(email_n, include_photo=True)
 
     terms_at = accepted_terms_at
     if terms_at is None:
@@ -355,7 +425,7 @@ def upsert_profile(
         ],
     )
     clear_profile_cache()
-    return fetch_profile(email_n) or {
+    return fetch_profile(email_n, include_photo=True) or {
         "USER_EMAIL": email_n,
         "FIRST_NAME": first,
         "LAST_NAME": last,
