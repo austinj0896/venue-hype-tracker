@@ -466,6 +466,14 @@ def list_profile_photos(email: str, include_bytes: bool = True) -> list[dict[str
         rows = []
     if rows:
         return [_normalize_photo_row(r, include_bytes=include_bytes) for r in rows]
+    # Recover if finish/setup wiped links but media assets still exist.
+    try:
+        repaired = repair_orphan_photo_links(email_n)
+    except Exception:
+        repaired = []
+    if repaired:
+        clear_profile_cache()
+        return [_normalize_photo_row(r, include_bytes=include_bytes) for r in repaired]
     try:
         migrated = _migrate_legacy_column_photo(email_n)
     except Exception:
@@ -477,6 +485,68 @@ def list_profile_photos(email: str, include_bytes: bool = True) -> list[dict[str
         return [{k: v for k, v in migrated[0].items() if k != "PHOTO_B64"}]
     return []
 
+
+def repair_orphan_photo_links(email: str) -> list[dict[str, Any]]:
+    """Relink media_photos uploaded by this user when the gallery has no links."""
+    if not email or backend() != "postgres":
+        return []
+    ensure_photos_schema()
+    email_n = email.strip().lower()
+    media_t = media_photos_table()
+    links_t = user_profile_photo_links_table()
+    existing = run_query(
+        f"select 1 as ok from {links_t} where lower(user_email) = lower(%s) limit 1",
+        [email_n],
+    )
+    if existing:
+        return []
+    rows = run_query(
+        f"""
+        select photo_id, photo_b64, photo_mime, created_at
+        from {media_t}
+        where lower(uploaded_by_email) = lower(%s)
+          and photo_b64 is not null
+          and length(photo_b64) > 0
+        order by created_at asc
+        """,
+        [email_n],
+    )
+    if not rows:
+        return []
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for row in rows:
+        b64 = row.get("PHOTO_B64") or ""
+        if not b64 or b64 in seen:
+            continue
+        seen.add(b64)
+        unique.append(row)
+        if len(unique) >= MAX_PROFILE_PHOTOS:
+            break
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(unique):
+        pid = str(row.get("PHOTO_ID"))
+        mime = (row.get("PHOTO_MIME") or "image/jpeg").strip() or "image/jpeg"
+        execute_write(
+            f"""
+            insert into {links_t} (user_email, photo_id, sort_order, linked_at)
+            values (%s, %s, %s, NOW())
+            on conflict do nothing
+            """,
+            [email_n, pid, idx],
+        )
+        out.append(
+            {
+                "PHOTO_ID": pid,
+                "SORT_ORDER": idx,
+                "PHOTO_B64": row.get("PHOTO_B64"),
+                "PHOTO_MIME": mime,
+                "IS_PRIMARY": idx == 0,
+            }
+        )
+    if out:
+        _sync_legacy_primary(email_n, out[0])
+    return out
 
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_profile_photo(email: str) -> dict[str, str | None] | None:

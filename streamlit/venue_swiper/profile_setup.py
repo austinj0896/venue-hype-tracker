@@ -480,11 +480,11 @@ def render_profile_preview_card(
         seg_html = ""
         nav_script = ""
 
-    # Portrait photo (~3:4 of ~360px) + taste chips; scroll inside iframe if needed.
+    # Portrait photo (~3:4) + taste chips; keep iframe scrollable so Dietary isn't clipped.
     act_n = max(1, len([a for a in activities if a]))
     diet_n = max(1, len(diet_items) or 1)
     chip_rows = (act_n + 1) // 2 + (diet_n + 1) // 2
-    frame_h = min(920, 560 + chip_rows * 40)
+    frame_h = min(720, 480 + chip_rows * 36)
 
     components.html(
         f"""<!DOCTYPE html>
@@ -514,6 +514,7 @@ def render_profile_preview_card(
     position: relative;
     width: 100%;
     aspect-ratio: 3 / 4;
+    max-height: 48vh;
     background: #2C1A10;
     overflow: hidden;
   }}
@@ -752,22 +753,12 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Preview dialog: style only — never touch position/transform (that shoved the card off-screen). */
+/* Preview dialog cosmetics only — do not set width/position (breaks Streamlit centering). */
 div[data-testid="stDialog"],
-div[data-testid="stModal"],
-[data-testid="stDialog"] [role="dialog"],
-div[data-testid="stDialog"] > div {
-    max-width: min(96vw, 420px) !important;
-    max-height: 92vh !important;
-    box-sizing: border-box !important;
-}
-div[data-testid="stDialog"] [role="dialog"],
-div[data-testid="stDialog"] {
+div[data-testid="stModal"] {
     background: #2C1A10 !important;
-    border: 1px solid rgba(248, 230, 210, 0.12) !important;
     color: #F8E6D2 !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
+    border: 1px solid rgba(248, 230, 210, 0.12) !important;
 }
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
 div[data-testid="stDialog"] h2,
@@ -778,13 +769,18 @@ div[data-testid="stDialog"] button[kind="header"],
 div[data-testid="stDialog"] button[aria-label="Close"] {
     color: #F8E6D2 !important;
 }
+/* Let the dialog body scroll so Into/Dietary aren't clipped on phones. */
+div[data-testid="stDialog"] [data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stDialog"] [data-testid="stVerticalBlock"] {
+    max-height: min(85vh, 820px) !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+}
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"],
 div[data-testid="stDialog"] iframe {
     display: block !important;
     width: 100% !important;
     max-width: 100% !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
 }
 .preview-chip {
     display: inline-flex;
@@ -1340,6 +1336,9 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
         return
     status = str(draft.get("relationship_status") or "").strip()
     open_to = draft.get("open_to_dates")
+    # Photos auto-save on edit. Never sync an empty draft gallery here — that
+    # wiped links when returning users finished Connection without hydrating photos.
+    update_photos = bool(draft.get("photos_changed")) and bool(draft.get("photos"))
     try:
         upsert_profile(
             email=email,
@@ -1357,8 +1356,8 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
             phone=str(draft.get("phone") or "") or None,
             relationship_status=status or None,
             open_to_dates=open_to if isinstance(open_to, bool) else None,
-            photos=list(draft.get("photos") or []),
-            update_photos=True,
+            photos=list(draft.get("photos") or []) if update_photos else None,
+            update_photos=update_photos,
             mark_complete=True,
         )
         partner_email = str(draft.get("partner_email_draft") or "").strip()
