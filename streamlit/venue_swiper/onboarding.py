@@ -11,7 +11,7 @@ from html import escape
 import streamlit as st
 
 from app_log import log_event
-from brand import brand_mark_html
+from brand import wordmark_path
 
 ONBOARDING_DONE_KEY = "apres_onboarding_done"
 ONBOARDING_STEP_KEY = "apres_onboarding_step"
@@ -41,34 +41,12 @@ _SLIDES = (
 
 def onboarding_css() -> str:
     return """
-.ob-splash {
-    min-height: min(52dvh, 420px);
-    min-height: 52vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 2.5rem 1rem 1.25rem;
-    margin: 0;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    animation: apres-fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+.ob-splash-spacer {
+    height: 1.25rem;
 }
-@supports (height: 1dvh) {
-    .ob-splash {
-        min-height: min(52dvh, 420px);
-    }
-}
-.ob-mark,
-.apres-brand-hero {
-    width: min(82%, 220px);
-    height: auto;
-    display: block;
-    margin: 0 auto 1.35rem;
+div[data-testid="stImage"] img {
     /* Optical center: left swash on A pulls weight left */
-    transform: translateX(4%);
+    transform: translateX(3%);
 }
 .ob-pulse {
     width: 10px;
@@ -77,6 +55,7 @@ def onboarding_css() -> str:
     background: #D3A345;
     box-shadow: 0 0 0 0 rgba(211, 163, 69, 0.55);
     animation: ob-pulse 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+    margin: 1rem auto 1.75rem;
 }
 @keyframes ob-pulse {
     0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(211, 163, 69, 0.55); }
@@ -162,13 +141,20 @@ def render_onboarding() -> None:
     step = int(st.session_state.get(ONBOARDING_STEP_KEY, 0))
 
     if step <= 0:
-        st.markdown(
-            '<div class="ob-splash">'
-            f"{brand_mark_html(size='hero')}"
-            '<div class="ob-pulse" aria-hidden="true"></div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        mark = wordmark_path(variant="light")
+        left, mid, right = st.columns([1, 3.2, 1])
+        with mid:
+            if mark is not None:
+                st.image(str(mark), use_container_width=True)
+            else:
+                st.markdown(
+                    '<div class="apres-brand-text" style="font-size:42px;text-align:center;">Après</div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown(
+                '<div class="ob-pulse" aria-hidden="true"></div>',
+                unsafe_allow_html=True,
+            )
         if st.button("Get started", type="primary", use_container_width=True, key="ob_splash"):
             st.session_state[ONBOARDING_STEP_KEY] = 1
             st.session_state[LOGIN_MODE_KEY] = "new"

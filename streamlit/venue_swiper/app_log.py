@@ -96,6 +96,10 @@ def log_event(
 
     if backend() != "postgres":
         return
+    # Info events stay in Cloud logs only — Neon writes on the auth path
+    # have contributed to mobile freezes (schema ensure + insert).
+    if level == "info":
+        return
     try:
         ensure_log_schema()
         execute_write(

@@ -2174,51 +2174,40 @@ def render_login() -> None:
 
     returning = st.session_state.get(LOGIN_MODE_KEY) == "returning"
     if returning:
-        render_apres_header("Welcome back.")
-        st.markdown(
-            '<p class="apres-sub">email only · no password</p>',
-            unsafe_allow_html=True,
-        )
-        panel_title = "Sign in with your email"
-        panel_body = "Same email as before. We’ll pick up your ratings and profile."
+        title = "Welcome back."
+        hint = "Same email as before. We’ll pick up your ratings and profile."
+        cta = "Continue"
     else:
-        render_apres_header("Create your account.")
-        st.markdown(
-            '<p class="apres-sub">email only · no password</p>',
-            unsafe_allow_html=True,
-        )
-        panel_title = "Start with your email"
-        panel_body = "A few taste questions come next, so Discover and dates fit you sooner."
+        title = "Create your account."
+        hint = "A few taste questions come next, so Discover and dates fit you sooner."
+        cta = "Continue"
 
+    # Keep login light: text brand only (no heavy wordmark embed).
     st.markdown(
-        '<div class="empty-state">'
-        f'<div class="empty-state-eyebrow">{"Sign in" if returning else "Registration"}</div>'
-        f'<div class="empty-state-title">{panel_title}</div>'
-        '<div class="empty-state-mark"></div>'
-        f"<p>{panel_body}</p>"
-        "</div>",
+        f"""
+        <div class="apres-status">
+            <span class="apres-brand-text" style="font-size:22px;line-height:1;">Après</span>
+            <span class="tagline">Find what comes next.</span>
+        </div>
+        <p class="apres-greeting">{title}</p>
+        <p class="apres-sub">email only · no password</p>
+        <p class="swipe-hint">{hint}</p>
+        """,
         unsafe_allow_html=True,
     )
-    show_recent_errors()
 
     with st.form("login_form", clear_on_submit=False):
         email_raw = st.text_input("Email", placeholder="you@example.com")
-        submitted = st.form_submit_button("Continue", use_container_width=True)
+        submitted = st.form_submit_button(cta, type="primary", use_container_width=True)
 
     if submitted:
         email = normalize_email(email_raw)
-        log_event("login_submit", "Continue pressed", email=email or None)
         if not is_valid_email(email):
-            log_event(
-                "login_invalid_email",
-                "Invalid email rejected",
-                level="warning",
-                email=email or None,
-            )
             st.error("Enter a valid email address.")
             return
         st.session_state["user_email"] = email
         clear_discover_venue()
+        # Avoid DB logging on the auth hot path — it has hung mobile before.
         log_event("login_ok", "Email accepted; entering app", email=email)
         st.rerun()
 
