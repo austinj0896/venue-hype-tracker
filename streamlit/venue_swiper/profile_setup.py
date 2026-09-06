@@ -354,6 +354,11 @@ def _open_profile_preview_dialog(
     open_to_dates: bool | None = None,
 ) -> None:
     """Modal profile preview — dismiss via X, Escape, or click outside."""
+    top_l, top_r = st.columns([5, 1])
+    with top_r:
+        if st.button("✕", key="preview_dialog_close", help="Close preview", use_container_width=True):
+            _dismiss_profile_preview()
+            st.rerun()
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -379,7 +384,7 @@ def render_profile_preview_card(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Phone-sized dating card; tap left/right on the photo to flip in-place."""
+    """Phone-sized dating card; photo taps flip in-place; dialog scrolls the body."""
     import json
 
     import streamlit.components.v1 as components
@@ -402,38 +407,36 @@ def render_profile_preview_card(
     place = escape(" · ".join(place_bits)) if place_bits else "Somewhere great"
     status_line = escape(relationship_preview_line(relationship_status, open_to_dates))
     status_html = (
-        f'<div class="status">{status_line}</div>' if status_line else ""
+        f'<div class="preview-status">{status_line}</div>' if status_line else ""
     )
 
     diet_items = [d for d in dietary if d and d != "None"]
     diet_html = _chips_html(diet_items) or (
-        '<span class="chip muted">Open to anything</span>'
+        '<span class="preview-chip muted">Open to anything</span>'
         if "None" in dietary or not dietary
         else ""
     )
-    diet_html = diet_html.replace("preview-chip", "chip")
     act_html = _chips_html(list(activities)) or (
         '<span class="preview-chip muted">Still figuring it out</span>'
     )
-    act_html = act_html.replace("preview-chip", "chip")
 
-    # Flips stay inside the iframe — parent URL changes bounced mobile back to welcome.
     uris: list[str] = []
     for photo in photos:
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
+    # Photo-only iframe (no inner scroll) — dialog scrolls the text/chips smoothly.
+    photo_h = 340
     if n:
         uri0 = uris[idx] if uris[idx] else ""
         img_html = (
             f'<img id="photo" src="{uri0}" alt=""/>'
             if uri0
-            else '<div class="empty" id="photoEmpty">No photo</div>'
+            else '<div class="empty">No photo</div>'
         )
         segments = "".join(
-            f'<span class="seg{" on" if i == idx else ""}" data-i="{i}"></span>' for i in range(n)
+            f'<span class="seg{" on" if i == idx else ""}"></span>' for i in range(n)
         )
-        seg_html = f'<div class="segs" id="segs">{segments}</div>'
         taps = (
             '<div class="tap left" id="tapL" role="button" aria-label="Previous photo"></div>'
             '<div class="tap right" id="tapR" role="button" aria-label="Next photo"></div>'
@@ -458,14 +461,22 @@ def render_profile_preview_card(
   }}
   function bind(el, delta) {{
     if (!el) return;
+    var startY = 0, startX = 0;
+    el.addEventListener("touchstart", function(e) {{
+      if (!e.touches || !e.touches.length) return;
+      startY = e.touches[0].clientY;
+      startX = e.touches[0].clientX;
+    }}, {{passive: true}});
     el.addEventListener("click", function(e) {{
       e.preventDefault();
-      e.stopPropagation();
       show(idx + delta);
     }});
     el.addEventListener("touchend", function(e) {{
+      if (!e.changedTouches || !e.changedTouches.length) return;
+      var dy = Math.abs(e.changedTouches[0].clientY - startY);
+      var dx = Math.abs(e.changedTouches[0].clientX - startX);
+      if (dy > 12 || dx > 12) return; /* scroll / swipe — don't steal */
       e.preventDefault();
-      e.stopPropagation();
       show(idx + delta);
     }}, {{passive: false}});
   }}
@@ -474,162 +485,75 @@ def render_profile_preview_card(
 }})();
 </script>
 """
-    else:
-        img_html = '<div class="empty">Add photos to fill this card</div>'
-        taps = ""
-        seg_html = ""
-        nav_script = ""
-
-    # Portrait photo (~3:4) + taste chips; keep iframe scrollable so Dietary isn't clipped.
-    act_n = max(1, len([a for a in activities if a]))
-    diet_n = max(1, len(diet_items) or 1)
-    chip_rows = (act_n + 1) // 2 + (diet_n + 1) // 2
-    frame_h = min(720, 480 + chip_rows * 36)
-
-    components.html(
-        f"""<!DOCTYPE html>
+        components.html(
+            f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-  html, body {{
-    margin: 0;
-    padding: 0;
-    background: transparent;
-    font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-  }}
-  .card {{
-    width: 100%;
-    max-width: none;
-    margin: 0;
-    background:
-      linear-gradient(165deg, rgba(211,163,69,0.18) 0%, transparent 38%),
-      linear-gradient(180deg, #7A5643 0%, #704D3B 55%, #5E3F31 100%);
-    border-radius: 22px;
-    border: 1px solid rgba(248, 230, 210, 0.12);
-    overflow: hidden;
-    color: #F8E6D2;
-    box-sizing: border-box;
-  }}
+  html, body {{ margin:0; padding:0; background:#2C1A10; }}
   .stage {{
-    position: relative;
-    width: 100%;
-    aspect-ratio: 3 / 4;
-    max-height: 48vh;
-    background: #2C1A10;
-    overflow: hidden;
+    position:relative; width:100%; height:{photo_h}px;
+    background:#2C1A10; overflow:hidden;
+    border-radius:18px 18px 0 0;
   }}
   .stage img {{
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: center 18%;
-    display: block;
-    pointer-events: none;
-    user-select: none;
-    -webkit-user-drag: none;
+    width:100%; height:100%; object-fit:cover; object-position:center 18%;
+    display:block; pointer-events:none; user-select:none; -webkit-user-drag:none;
   }}
   .empty {{
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    min-height: 280px;
-    color: rgba(248,230,210,0.55);
-    font-size: 15px;
-    padding: 1.5rem;
-    text-align: center;
+    display:flex; align-items:center; justify-content:center; height:100%;
+    color:rgba(248,230,210,.55); font:15px/1.4 system-ui,sans-serif; padding:1.5rem; text-align:center;
   }}
   .segs {{
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    right: 10px;
-    display: flex;
-    gap: 4px;
-    z-index: 3;
-    pointer-events: none;
+    position:absolute; top:10px; left:10px; right:10px; display:flex; gap:4px;
+    z-index:3; pointer-events:none;
   }}
-  .seg {{
-    flex: 1;
-    height: 3px;
-    border-radius: 99px;
-    background: rgba(248,230,210,0.28);
-  }}
-  .seg.on {{ background: #F8E6D2; }}
+  .seg {{ flex:1; height:3px; border-radius:99px; background:rgba(248,230,210,.28); }}
+  .seg.on {{ background:#F8E6D2; }}
   .tap {{
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 50%;
-    z-index: 4;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
+    position:absolute; top:0; bottom:0; width:50%; z-index:4; cursor:pointer;
+    -webkit-tap-highlight-color:transparent; touch-action:pan-y;
   }}
-  .tap.left {{ left: 0; }}
-  .tap.right {{ right: 0; }}
-  .tap:active {{ background: rgba(248,230,210,0.12); }}
-  .body {{ padding: 0.95rem 1rem 1.15rem; }}
-  .name {{
-    font-family: Georgia, 'Times New Roman', serif;
-    font-size: 28px;
-    font-weight: 500;
-    font-style: italic;
-    color: #F8E6D2;
-    line-height: 1.1;
-    margin: 0 0 0.25rem;
-  }}
-  .place {{
-    font-size: 13px;
-    color: rgba(248,230,210,0.72);
-    margin: 0 0 0.35rem;
-  }}
-  .status {{
-    font-size: 12px;
-    color: rgba(211,163,69,0.95);
-    margin: 0 0 0.7rem;
-  }}
-  .label {{
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: rgba(248,230,210,0.45);
-    margin: 0.45rem 0 0.28rem;
-  }}
-  .chips {{ display: flex; flex-wrap: wrap; gap: 0.3rem; }}
-  .chip {{
-    display: inline-flex;
-    align-items: center;
-    min-height: 28px;
-    padding: 0.22rem 0.6rem;
-    border-radius: 999px;
-    background: rgba(248,230,210,0.1);
-    border: 1px solid rgba(248,230,210,0.14);
-    color: #F8E6D2;
-    font-size: 12px;
-  }}
-  .chip.muted {{ color: rgba(248,230,210,0.55); }}
+  .tap.left {{ left:0; }}
+  .tap.right {{ right:0; }}
+  .tap:active {{ background:rgba(248,230,210,.1); }}
 </style></head><body>
-<div class="card">
-  <div class="stage">
-    {seg_html}
-    {img_html}
-    {taps}
-  </div>
-  <div class="body">
-    <div class="name">{title}</div>
-    <div class="place">{place}</div>
-    {status_html}
-    <div class="label">Into</div>
-    <div class="chips">{act_html}</div>
-    <div class="label">Dietary</div>
-    <div class="chips">{diet_html}</div>
-  </div>
+<div class="stage">
+  <div class="segs" id="segs">{segments}</div>
+  {img_html}
+  {taps}
 </div>
 {nav_script}
 </body></html>""",
-        height=frame_h,
-        scrolling=True,
+            height=photo_h,
+            scrolling=False,
+        )
+    else:
+        components.html(
+            f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+  html,body{{margin:0;background:#2C1A10}}
+  .empty{{height:{photo_h}px;display:flex;align-items:center;justify-content:center;
+    color:rgba(248,230,210,.55);font:15px/1.4 system-ui,sans-serif;padding:1.5rem;text-align:center;
+    border-radius:18px 18px 0 0}}
+</style></head><body><div class="empty">Add photos to fill this card</div></body></html>""",
+            height=photo_h,
+            scrolling=False,
+        )
+
+    st.markdown(
+        f"""
+        <div class="preview-body-card">
+          <div class="preview-name">{title}</div>
+          <div class="preview-place">{place}</div>
+          {status_html}
+          <div class="preview-group-label">Into</div>
+          <div class="preview-chips">{act_html}</div>
+          <div class="preview-group-label">Dietary</div>
+          <div class="preview-chips">{diet_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
@@ -753,7 +677,7 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Preview dialog cosmetics only — do not set width/position (breaks Streamlit centering). */
+/* Preview dialog: visible close affordance + smooth single-axis scroll. */
 div[data-testid="stDialog"],
 div[data-testid="stModal"] {
     background: #2C1A10 !important;
@@ -765,22 +689,90 @@ div[data-testid="stDialog"] h2,
 div[data-testid="stDialog"] [data-testid="stWidgetLabel"] {
     color: #F8E6D2 !important;
 }
+/* Native Streamlit dialog X */
 div[data-testid="stDialog"] button[kind="header"],
-div[data-testid="stDialog"] button[aria-label="Close"] {
+div[data-testid="stDialog"] button[aria-label="Close"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-header"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button {
+    color: #F8E6D2 !important;
+    opacity: 1 !important;
+    font-size: 1.35rem !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+}
+/* Explicit ✕ button in the dialog body */
+div[data-testid="stDialog"] button[kind="secondary"] p,
+div[data-testid="stDialog"] button[data-testid="baseButton-secondary"] {
     color: #F8E6D2 !important;
 }
-/* Let the dialog body scroll so Into/Dietary aren't clipped on phones. */
-div[data-testid="stDialog"] [data-testid="stVerticalBlockBorderWrapper"],
-div[data-testid="stDialog"] [data-testid="stVerticalBlock"] {
-    max-height: min(85vh, 820px) !important;
-    overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch !important;
+div[data-testid="stDialog"] div[data-testid="stHorizontalBlock"]:first-of-type button {
+    background: rgba(248, 230, 210, 0.1) !important;
+    border: 1px solid rgba(248, 230, 210, 0.22) !important;
+    color: #F8E6D2 !important;
+    border-radius: 999px !important;
+    font-size: 1.15rem !important;
+    font-weight: 500 !important;
+    min-height: 40px !important;
 }
-div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"],
-div[data-testid="stDialog"] iframe {
+/* One smooth scroll surface — no nested iframe scrolling. */
+div[data-testid="stDialog"] [data-testid="stVerticalBlock"] {
+    max-height: min(88vh, 900px) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+    overscroll-behavior: contain;
+    scroll-behavior: smooth;
+}
+div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
+    margin: 0 !important;
+}
+div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
     display: block !important;
     width: 100% !important;
     max-width: 100% !important;
+    border: none !important;
+    background: #2C1A10 !important;
+    /* Prevent the iframe from becoming a second scroll trap */
+    pointer-events: auto;
+}
+.preview-body-card {
+    background:
+        linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
+    border-radius: 0 0 18px 18px;
+    padding: 1rem 1.05rem 1.25rem;
+    margin: 0 0 0.35rem;
+    color: #F8E6D2;
+}
+.preview-body-card .preview-name {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 28px;
+    font-weight: 500;
+    font-style: italic;
+    color: #F8E6D2;
+    line-height: 1.1;
+    margin: 0 0 0.25rem;
+}
+.preview-body-card .preview-place {
+    font-size: 13px;
+    color: rgba(248,230,210,0.72);
+    margin: 0 0 0.3rem;
+}
+.preview-body-card .preview-status {
+    font-size: 12px;
+    color: rgba(211,163,69,0.95);
+    margin: 0 0 0.65rem;
+}
+.preview-body-card .preview-group-label {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(248,230,210,0.45);
+    margin: 0.45rem 0 0.28rem;
+}
+.preview-body-card .preview-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
 }
 .preview-chip {
     display: inline-flex;
