@@ -19,8 +19,9 @@ Common commands
   # List everything (metadata only — no image bytes)
   python3 scripts/admin_photos.py list --limit 50
 
-  # Destroy one photo by UUID (also removes any remaining profile links)
-  python3 scripts/admin_photos.py destroy --id <uuid> --yes
+  # Export one photo to a local file and open it (macOS Preview)
+  python3 scripts/admin_photos.py export --id <uuid>
+  python3 scripts/admin_photos.py export --id <uuid> --out ~/Desktop/photo.jpg --open
 
   # Destroy all orphans older than N days
   python3 scripts/admin_photos.py destroy-orphans --older-than-days 30 --yes
@@ -32,7 +33,9 @@ Common commands
 from __future__ import annotations
 
 import argparse
+import base64
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -226,6 +229,53 @@ def cmd_destroy_uploader(cur, *, email: str, yes: bool) -> None:
     print(f"Destroyed {cur.rowcount} media row(s).")
 
 
+def cmd_export(
+    cur,
+    *,
+    photo_id: str,
+    out: str | None,
+    open_file: bool,
+) -> None:
+    cur.execute(
+        """
+        select photo_id, photo_b64, photo_mime, uploaded_by_email, created_at
+        from media_photos
+        where photo_id = %s
+        """,
+        [photo_id],
+    )
+    row = cur.fetchone()
+    if not row:
+        raise SystemExit(f"No media_photos row for id={photo_id}")
+    b64 = row["photo_b64"]
+    if not b64:
+        raise SystemExit("Photo has empty bytes.")
+    raw = base64.b64decode(b64)
+    mime = (row["photo_mime"] or "image/jpeg").lower()
+    ext = ".jpg"
+    if "png" in mime:
+        ext = ".png"
+    elif "webp" in mime:
+        ext = ".webp"
+    elif "gif" in mime:
+        ext = ".gif"
+
+    if out:
+        path = Path(out).expanduser().resolve()
+    else:
+        path = (ROOT / "data" / "admin_photo_exports" / f"{row['photo_id']}{ext}").resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    print(f"Wrote {path} ({len(raw)} bytes)")
+    print(f"uploader={row['uploaded_by_email']} mime={row['photo_mime']} created={row['created_at']}")
+    if open_file:
+        try:
+            subprocess.run(["open", str(path)], check=False)
+        except Exception as exc:
+            print(f"Could not open automatically: {exc}")
+            print(f"Open manually: {path}")
+
+
 def main(argv: list[str] | None = None) -> int:
     _load_env()
     parser = argparse.ArgumentParser(
@@ -238,6 +288,20 @@ def main(argv: list[str] | None = None) -> int:
 
     p_orph = sub.add_parser("orphans", help="List unlinked photos")
     p_orph.add_argument("--limit", type=int, default=100)
+
+    p_exp = sub.add_parser("export", help="Write a photo to disk (optionally open it)")
+    p_exp.add_argument("--id", required=True, help="media_photos.photo_id UUID")
+    p_exp.add_argument(
+        "--out",
+        default=None,
+        help="Output path (default: data/admin_photo_exports/<id>.jpg)",
+    )
+    p_exp.add_argument(
+        "--open",
+        dest="open_file",
+        action="store_true",
+        help="Open the file after export (macOS `open`)",
+    )
 
     p_des = sub.add_parser("destroy", help="Permanently delete one photo by UUID")
     p_des.add_argument("--id", required=True, help="media_photos.photo_id UUID")
@@ -261,6 +325,13 @@ def main(argv: list[str] | None = None) -> int:
                     cmd_list(cur, limit=args.limit, orphans_only=False)
                 elif args.cmd == "orphans":
                     cmd_list(cur, limit=args.limit, orphans_only=True)
+                elif args.cmd == "export":
+                    cmd_export(
+                        cur,
+                        photo_id=args.id,
+                        out=args.out,
+                        open_file=args.open_file,
+                    )
                 elif args.cmd == "destroy":
                     cmd_destroy(cur, photo_id=args.id, yes=args.yes)
                 elif args.cmd == "destroy-orphans":
