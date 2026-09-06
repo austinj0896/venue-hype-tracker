@@ -116,9 +116,8 @@ def _persist_photos_now(email: str, draft: dict[str, Any]) -> bool:
         st.error("Missing email — can’t save photos.")
         return False
     try:
-        with st.spinner("Saving photos…"):
-            save_profile_photos(email_n, list(draft.get("photos") or []))
-            rows = list_profile_photos(email_n, include_bytes=True)
+        save_profile_photos(email_n, list(draft.get("photos") or []))
+        rows = list_profile_photos(email_n, include_bytes=True)
         draft["photos"] = [
             {
                 "PHOTO_ID": r.get("PHOTO_ID"),
@@ -163,48 +162,81 @@ def _hydrate_draft_photos(email: str, draft: dict[str, Any], profile: dict[str, 
 
 
 def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) -> None:
-    """Multi-photo gallery — changes persist immediately (no second Save needed)."""
-    st.markdown("Photos (optional)")
-    st.caption(
-        f"Add up to {MAX_PROFILE_PHOTOS}. First photo is your main avatar. "
-        "Changes save instantly. Remove only unlinks from your profile."
+    """Dating-app style photo grid — add / make main / remove, saves instantly."""
+    st.markdown('<div class="photo-editor-label">Photos</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<p class="photo-editor-hint">Up to {MAX_PROFILE_PHOTOS}. Your main photo is what people see first. '
+        "Edits save automatically.</p>",
+        unsafe_allow_html=True,
     )
 
     photos: list[dict[str, Any]] = list(draft.get("photos") or [])
-    if photos:
-        cols = st.columns(min(3, len(photos)))
-        for i, photo in enumerate(photos):
-            with cols[i % len(cols)]:
-                raw = photo_bytes(photo.get("PHOTO_B64"))
-                if raw:
-                    st.image(raw, width=96)
-                label = "Primary" if i == 0 else f"Photo {i + 1}"
-                st.caption(label)
-                b1, b2, b3 = st.columns(3)
-                with b1:
-                    if i > 0 and st.button("↑", key=f"{key_prefix}_up_{i}", help="Move earlier"):
-                        photos[i - 1], photos[i] = photos[i], photos[i - 1]
-                        draft["photos"] = photos
-                        _save_draft(draft)
-                        _persist_photos_now(email, draft)
-                        st.rerun()
-                with b2:
-                    if i < len(photos) - 1 and st.button(
-                        "↓", key=f"{key_prefix}_down_{i}", help="Move later"
+
+    def _commit(next_photos: list[dict[str, Any]]) -> None:
+        draft["photos"] = next_photos
+        draft.pop("_photo_upload_marker", None)
+        _save_draft(draft)
+        _persist_photos_now(email, draft)
+        st.rerun()
+
+    # Fixed 2×3 grid (or 1×3 if fewer slots) — always shows empty add slots.
+    for row_start in range(0, MAX_PROFILE_PHOTOS, 3):
+        cols = st.columns(3, gap="small")
+        for offset in range(3):
+            i = row_start + offset
+            with cols[offset]:
+                if i < len(photos):
+                    photo = photos[i]
+                    uri = photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME"))
+                    badge = (
+                        '<span class="photo-main-badge">Main</span>'
+                        if i == 0
+                        else f'<span class="photo-slot-num">{i + 1}</span>'
+                    )
+                    if uri:
+                        st.markdown(
+                            f'<div class="photo-tile">{badge}<img src="{uri}" alt="" /></div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            '<div class="photo-tile photo-tile-empty">'
+                            '<span class="photo-plus-label">Broken</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown('<div class="photo-actions">', unsafe_allow_html=True)
+                    if i == 0:
+                        st.markdown(
+                            '<div class="photo-main-static">Main photo</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        if st.button(
+                            "Make main",
+                            key=f"{key_prefix}_main_{i}",
+                            use_container_width=True,
+                        ):
+                            moved = photos.pop(i)
+                            photos.insert(0, moved)
+                            _commit(photos)
+                    if st.button(
+                        "Remove",
+                        key=f"{key_prefix}_del_{i}",
+                        use_container_width=True,
                     ):
-                        photos[i + 1], photos[i] = photos[i], photos[i + 1]
-                        draft["photos"] = photos
-                        _save_draft(draft)
-                        _persist_photos_now(email, draft)
-                        st.rerun()
-                with b3:
-                    if st.button("✕", key=f"{key_prefix}_del_{i}", help="Remove from profile"):
                         photos.pop(i)
-                        draft["photos"] = photos
-                        draft.pop("_photo_upload_marker", None)
-                        _save_draft(draft)
-                        _persist_photos_now(email, draft)
-                        st.rerun()
+                        _commit(photos)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        '<div class="photo-tile photo-tile-empty">'
+                        '<span class="photo-plus">+</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        '<div class="photo-actions photo-actions-spacer" aria-hidden="true"></div>',
+                        unsafe_allow_html=True,
+                    )
 
     remaining = MAX_PROFILE_PHOTOS - len(photos)
     if remaining > 0:
@@ -213,7 +245,7 @@ def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) 
             type=["jpg", "jpeg", "png", "webp"],
             accept_multiple_files=True,
             key=f"{key_prefix}_photo_upload",
-            label_visibility="collapsed",
+            help="JPG, PNG, or WebP · under 5 MB each",
         )
         if uploaded:
             marker = "|".join(f"{f.name}:{getattr(f, 'size', 0)}" for f in uploaded)
@@ -226,7 +258,7 @@ def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) 
                     try:
                         b64, mime = prepare_profile_photo(f)
                     except Exception as exc:  # noqa: BLE001
-                        errors.append(f"{f.name}: {exc}")
+                        errors.append(f"{getattr(f, 'name', 'photo')}: {exc}")
                         continue
                     photos.append({"PHOTO_B64": b64, "PHOTO_MIME": mime})
                     added += 1
@@ -240,8 +272,6 @@ def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) 
                     st.rerun()
     else:
         st.caption("Photo limit reached — remove one to add another.")
-
-    st.caption("JPG, PNG, or WebP · under 5 MB each · resized to fit.")
 
 
 def _age_from_dob(dob: Any) -> int | None:
@@ -581,6 +611,134 @@ def profile_setup_css() -> str:
 .preview-chip.muted {
     color: rgba(248,230,210,0.55);
     font-style: italic;
+}
+.photo-editor-label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7A5B48;
+    margin: 0.15rem 0 0.35rem;
+}
+.photo-editor-hint {
+    font-size: 13px;
+    color: #7A5B48;
+    margin: 0 0 0.85rem;
+    line-height: 1.45;
+}
+.photo-tile {
+    position: relative;
+    aspect-ratio: 3 / 4;
+    width: 100%;
+    border-radius: 16px;
+    overflow: hidden;
+    background:
+        linear-gradient(160deg, rgba(211,163,69,0.12), transparent 55%),
+        #E8D9C8;
+    border: 1px solid rgba(112,77,59,0.12);
+    box-shadow: 0 2px 6px rgba(44,26,16,0.04);
+    margin: 0 0 0.45rem;
+}
+.photo-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.photo-tile-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    border: 1.5px dashed rgba(112,77,59,0.28);
+    background: rgba(112,77,59,0.04);
+    box-shadow: none;
+    color: #7A5B48;
+}
+.photo-tile-empty .photo-plus {
+    font-size: 28px;
+    line-height: 1;
+    color: #D3A345;
+    font-weight: 300;
+}
+.photo-tile-empty .photo-plus-label {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.photo-main-badge,
+.photo-slot-num {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 2;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.28rem 0.5rem;
+    border-radius: 999px;
+    backdrop-filter: blur(8px);
+}
+.photo-main-badge {
+    color: #2C1A10;
+    background: rgba(211,163,69,0.92);
+}
+.photo-slot-num {
+    color: #F8E6D2;
+    background: rgba(44,26,16,0.45);
+}
+.photo-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.85rem;
+    min-height: 5.5rem;
+}
+.photo-actions-spacer {
+    min-height: 5.5rem;
+}
+.photo-main-static {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #7A5B48;
+    background: rgba(211,163,69,0.14);
+    border: 1px solid rgba(211,163,69,0.35);
+    border-radius: 10px;
+}
+div[data-testid="stFileUploader"] section {
+    border: 1.5px dashed rgba(112,77,59,0.28) !important;
+    background: rgba(112,77,59,0.04) !important;
+    border-radius: 16px !important;
+    padding: 1.15rem 1rem !important;
+    transition: border-color 200ms ease, background 200ms ease;
+}
+div[data-testid="stFileUploader"] section:hover {
+    border-color: rgba(211,163,69,0.55) !important;
+    background: rgba(211,163,69,0.08) !important;
+}
+div[data-testid="stFileUploader"] label {
+    font-size: 14px !important;
+    color: #704D3B !important;
+}
+div[data-testid="stFileUploader"] small,
+div[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] p {
+    color: #7A5B48 !important;
+}
+@media (max-width: 640px) {
+    .photo-tile {
+        border-radius: 14px;
+    }
+    .photo-actions {
+        margin-bottom: 0.7rem;
+    }
 }
 """
 
