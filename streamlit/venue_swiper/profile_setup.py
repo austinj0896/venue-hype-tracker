@@ -496,6 +496,8 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
     st.session_state.pop(DRAFT_KEY, None)
     st.session_state.pop(STEP_KEY, None)
     clear_profile_cache()
+    st.session_state["just_completed_profile"] = True
+    st.session_state["just_completed_profile_name"] = str(draft.get("first_name") or "").strip()
     st.toast("Profile saved — welcome to Après.")
     st.rerun()
 

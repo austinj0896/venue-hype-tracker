@@ -48,6 +48,7 @@ from date_planner import (
 from geo import filter_by_radius, miles_to_meters
 from location_ui import render_location_picker
 from places_data import fetch_community_ratings, fetch_venues_with_coords
+from profile_options import preferred_types_from_activities
 from profile_setup import render_profile_settings, render_profile_setup
 from user_profiles_store import fetch_profile, is_profile_complete, photo_data_uri
 from planned_dates_store import fetch_planned_dates, save_planned_date
@@ -55,6 +56,11 @@ from planned_dates_store import fetch_planned_dates, save_planned_date
 DEFAULT_BOROUGH = "Manhattan Beach"
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 DISCOVER_BOROUGH_KEY = "discover_borough"
+FEEDBACK_KEY = "apres_action_feedback"
+SESSION_RATINGS_KEY = "session_ratings"
+SESSION_SKIPS_KEY = "session_skips"
+WELCOME_FLAG_KEY = "just_completed_profile"
+WELCOME_NAME_KEY = "just_completed_profile_name"
 
 
 def discover_venue_key(borough: str) -> str:
@@ -943,6 +949,102 @@ div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
     color: var(--brown) !important;
     font-weight: 600 !important;
 }}
+.apres-feedback {{
+    background: var(--surface);
+    backdrop-filter: blur(14px) saturate(1.1);
+    -webkit-backdrop-filter: blur(14px) saturate(1.1);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(211, 163, 69, 0.35);
+    box-shadow: var(--shadow-md), 0 0 0 1px rgba(211, 163, 69, 0.08);
+    padding: 1.05rem 1.15rem 1.1rem;
+    margin: 0 0 var(--space-4);
+    animation: apres-card-in var(--dur-slow) var(--ease-out) both;
+}}
+.apres-feedback-eyebrow {{
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0 0 0.35rem;
+}}
+.apres-feedback-title {{
+    font-family: {FONT_SERIF};
+    font-size: 24px;
+    font-weight: 500;
+    font-style: italic;
+    color: var(--brown);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.35rem;
+}}
+.apres-feedback-body {{
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-mid);
+    margin: 0;
+}}
+.progress-nudge {{
+    font-size: 12px;
+    color: var(--gold);
+    letter-spacing: 0.04em;
+    margin: 0.15rem 0 0.55rem;
+    font-family: {FONT_SERIF};
+    font-style: italic;
+}}
+.progress-session {{
+    font-size: 11px;
+    color: var(--text-light);
+    letter-spacing: 0.06em;
+    margin: 0 0 0.35rem;
+}}
+.locals-line {{
+    position: relative;
+    z-index: 2;
+    font-size: 12px;
+    color: rgba(248, 230, 210, 0.62);
+    letter-spacing: 0.03em;
+    margin: 0 0 0.85rem;
+}}
+.locals-line strong {{
+    color: var(--gold);
+    font-weight: 500;
+}}
+.apres-welcome {{
+    background:
+        linear-gradient(165deg, rgba(211,163,69,0.16) 0%, transparent 40%),
+        linear-gradient(180deg, #7A5643 0%, var(--brown) 55%, #5E3F31 100%);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(248, 230, 210, 0.08);
+    box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(248, 230, 210, 0.1);
+    padding: 1.6rem 1.3rem 1.35rem;
+    margin: 0.5rem 0 1.25rem;
+    animation: apres-card-in var(--dur-slow) var(--ease-out) both;
+}}
+.apres-welcome-eyebrow {{
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0 0 0.45rem;
+}}
+.apres-welcome-title {{
+    font-family: {FONT_SERIF};
+    font-size: clamp(28px, 7vw, 34px);
+    font-weight: 500;
+    font-style: italic;
+    color: var(--cream);
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    margin: 0 0 0.45rem;
+}}
+.apres-welcome-body {{
+    font-size: 14px;
+    line-height: 1.55;
+    color: rgba(248, 230, 210, 0.68);
+    margin: 0;
+}}
 @media (prefers-reduced-motion: reduce) {{
     *, *::before, *::after {{
         animation-duration: 0.01ms !important;
@@ -1010,6 +1112,92 @@ def empty_state_html(*, eyebrow: str, title: str, body: str) -> str:
         f"<p>{body}</p>"
         f"</div>"
     )
+
+
+def bump_session_counter(kind: str) -> None:
+    key = SESSION_RATINGS_KEY if kind == "rated" else SESSION_SKIPS_KEY
+    st.session_state[key] = int(st.session_state.get(key) or 0) + 1
+
+
+def queue_action_feedback(
+    *,
+    kind: str,
+    place_name: str,
+    rating: float | None = None,
+) -> None:
+    """Persist feedback across the next rerun so the panel is actually visible."""
+    name = (place_name or "that spot").strip() or "that spot"
+    if kind == "skipped":
+        payload = {
+            "eyebrow": "Parked for later",
+            "title": f"Skipped {name}",
+            "body": "Find it again under Skipped when you’ve been.",
+        }
+    elif kind == "updated":
+        stars = f"{rating:.1f}" if rating is not None else ""
+        payload = {
+            "eyebrow": "Updated",
+            "title": f"{stars}★ locked in" if stars else "Rating updated",
+            "body": f"{name} — your taste map just got clearer.",
+        }
+    else:
+        score = float(rating or 0)
+        if score >= 4.5:
+            payload = {
+                "eyebrow": "A favorite",
+                "title": f"{score:.1f}★ — yes",
+                "body": f"{name} joins your shortlist.",
+            }
+        elif score >= 3.0:
+            payload = {
+                "eyebrow": "Noted",
+                "title": f"{score:.1f}★ saved",
+                "body": f"{name} is on your map.",
+            }
+        else:
+            payload = {
+                "eyebrow": "Honest take",
+                "title": f"{score:.1f}★ logged",
+                "body": f"{name} — noted, and we’ll steer around it.",
+            }
+    st.session_state[FEEDBACK_KEY] = payload
+
+
+def render_queued_feedback() -> None:
+    payload = st.session_state.pop(FEEDBACK_KEY, None)
+    if not isinstance(payload, dict):
+        return
+    st.markdown(
+        f'<div class="apres-feedback">'
+        f'<div class="apres-feedback-eyebrow">{escape(str(payload.get("eyebrow") or ""))}</div>'
+        f'<div class="apres-feedback-title">{escape(str(payload.get("title") or ""))}</div>'
+        f'<p class="apres-feedback-body">{escape(str(payload.get("body") or ""))}</p>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_profile_welcome() -> bool:
+    """One-shot premium welcome after profile setup. Returns True if still showing."""
+    if not st.session_state.get(WELCOME_FLAG_KEY):
+        return False
+    name = (st.session_state.get(WELCOME_NAME_KEY) or "").strip() or "there"
+    st.markdown(
+        f'<div class="apres-welcome">'
+        f'<div class="apres-welcome-eyebrow">Welcome</div>'
+        f'<div class="apres-welcome-title">You’re in, {escape(name)}.</div>'
+        f'<p class="apres-welcome-body">'
+        "Discover is ready — rate what you’ve tried, skip what you haven’t, "
+        "and we’ll start shaping dates around your taste."
+        "</p>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Start exploring", type="primary", use_container_width=True, key="welcome_continue"):
+        st.session_state.pop(WELCOME_FLAG_KEY, None)
+        st.session_state.pop(WELCOME_NAME_KEY, None)
+        st.rerun()
+    return True
 
 
 def show_data_error(exc: Exception) -> None:
@@ -1094,17 +1282,42 @@ def render_apres_header(subtitle: str = "Manhattan Beach", photo_uri: str | None
         st.markdown(f'<p class="apres-greeting">{subtitle}</p>', unsafe_allow_html=True)
 
 
-def render_progress(stats: dict[str, int]) -> None:
+def render_progress(stats: dict[str, int], *, borough: str | None = None) -> None:
     pct = (stats["reviewed"] / stats["total"] * 100) if stats["total"] else 0
+    remaining = int(stats.get("remaining") or 0)
+    session_rated = int(st.session_state.get(SESSION_RATINGS_KEY) or 0)
+    session_skipped = int(st.session_state.get(SESSION_SKIPS_KEY) or 0)
+
+    session_bits: list[str] = []
+    if session_rated:
+        session_bits.append(f"{session_rated} rated this session")
+    if session_skipped:
+        session_bits.append(f"{session_skipped} skipped")
+    session_html = (
+        f'<div class="progress-session">{escape(" · ".join(session_bits))}</div>'
+        if session_bits
+        else ""
+    )
+
+    nudge_html = ""
+    if remaining == 0 and borough:
+        nudge_html = (
+            f'<div class="progress-nudge">You cleared {escape(borough)} — nice.</div>'
+        )
+    elif 0 < remaining <= 3:
+        nudge_html = (
+            '<div class="progress-nudge">Almost there — a few spots left.</div>'
+        )
+
     st.markdown(
-        f"""
-        <div class="progress-caption">
-            {stats['remaining']} left &middot; {stats['rated']} rated &middot; {stats['skipped']} skipped
-        </div>
-        <div class="progress-track">
-            <div class="progress-bar" style="width: {pct:.1f}%;"></div>
-        </div>
-        """,
+        f'<div class="progress-caption">'
+        f'{stats["remaining"]} left &middot; {stats["rated"]} rated &middot; {stats["skipped"]} skipped'
+        f"</div>"
+        f"{session_html}"
+        f"{nudge_html}"
+        f'<div class="progress-track">'
+        f'<div class="progress-bar" style="width: {pct:.1f}%;"></div>'
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -1146,7 +1359,17 @@ def get_discover_venue(email: str, borough: str) -> dict[str, Any] | None:
     key = discover_venue_key(borough)
     if key in st.session_state:
         return st.session_state[key]
-    venue = fetch_next_venue(email, borough)
+    preferred: tuple[str, ...] = ()
+    try:
+        profile = fetch_profile(email)
+        preferred = tuple(
+            preferred_types_from_activities(
+                list((profile or {}).get("ACTIVITY_PREFERENCES") or [])
+            )
+        )
+    except Exception:
+        preferred = ()
+    venue = fetch_next_venue(email, borough, preferred)
     if venue:
         st.session_state[key] = venue
     return venue
@@ -1197,8 +1420,23 @@ def fetch_stats(email: str, borough: str) -> dict[str, int]:
 
 
 @st.cache_data(show_spinner=False)
-def fetch_next_venue(email: str, borough: str) -> dict[str, Any] | None:
+def fetch_next_venue(
+    email: str,
+    borough: str,
+    preferred_types: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
     type_filter, type_params = venue_type_filter_sql("d")
+    preferred = [t for t in preferred_types if t]
+
+    order_sql = "order by random()"
+    order_params: list[Any] = []
+    if preferred:
+        placeholders = ", ".join("?" for _ in preferred)
+        order_sql = (
+            f"order by case when d.primary_type in ({placeholders}) then 0 else 1 end, random()"
+        )
+        order_params = list(preferred)
+
     sql = f"""
         select
             d.google_place_id,
@@ -1218,10 +1456,10 @@ def fetch_next_venue(email: str, borough: str) -> dict[str, Any] | None:
               where r.user_email = ?
                 and r.google_place_id = d.google_place_id
           )
-        order by random()
+        {order_sql}
         limit 1
     """
-    rows = run_query(sql, [borough, *type_params, email])
+    rows = run_query(sql, [borough, *type_params, email, *order_params])
     return rows[0] if rows else None
 
 
@@ -1864,6 +2102,7 @@ def render_venue_card(
     venue: dict[str, Any],
     tags: list[dict[str, Any]] | None = None,
     hours: dict[str, Any] | None = None,
+    community_line: str | None = None,
 ) -> None:
     name = escape(str(venue.get("PLACE_NAME") or "Unknown venue"))
     address = venue.get("SHORT_FORMATTED_ADDRESS") or venue.get("FORMATTED_ADDRESS") or ""
@@ -1886,6 +2125,10 @@ def render_venue_card(
     if price:
         pills += f"<span>{escape(price)}</span>"
 
+    locals_html = ""
+    if community_line:
+        locals_html = f'<div class="locals-line">{community_line}</div>'
+
     footer_html = ""
     if website:
         safe_url = escape(str(website), quote=True)
@@ -1902,6 +2145,7 @@ def render_venue_card(
         f'<div class="date-card-title">{name}</div>'
         f'<div class="date-card-meta">{meta_line}</div>'
         f'<div class="date-card-pills">{pills}</div>'
+        f"{locals_html}"
         f"{hours_html(hours)}"
         f"{vibe_tags_html(tags)}"
         f"{footer_html}"
@@ -1937,7 +2181,8 @@ def render_discover(email: str) -> None:
         return
 
     st.markdown('<div class="section-label">Discover</div>', unsafe_allow_html=True)
-    render_progress(stats)
+    render_queued_feedback()
+    render_progress(stats, borough=borough)
 
     venue = get_discover_venue(email, borough)
     if not venue:
@@ -1946,7 +2191,7 @@ def render_discover(email: str) -> None:
                 eyebrow="All caught up",
                 title=f"{borough} is clear",
                 body=(
-                    f"No unrated spots left here. Try another location, "
+                    f"You cleared this area. Try another location, "
                     f"or revisit <strong>My ratings</strong> and <strong>Skipped</strong>."
                 ),
             ),
@@ -1954,7 +2199,19 @@ def render_discover(email: str) -> None:
         )
         return
 
-    render_venue_card(venue)
+    community_line = None
+    try:
+        community = fetch_community_ratings(borough)
+        stats_row = community.get(str(venue.get("GOOGLE_PLACE_ID") or ""))
+        if stats_row and stats_row.rating_count >= 2:
+            community_line = (
+                f"Locals · <strong>{stats_row.avg_rating:.1f}★</strong> · "
+                f"{stats_row.rating_count} ratings"
+            )
+    except Exception:
+        community_line = None
+
+    render_venue_card(venue, community_line=community_line)
     st.markdown(
         '<p class="swipe-hint">Skip if you haven\'t been · Rate when you have</p>',
         unsafe_allow_html=True,
@@ -1990,7 +2247,9 @@ def render_discover(email: str) -> None:
                 status="skipped",
                 rating=None,
             )
-            st.toast("Skipped - find it again under Skipped.")
+            bump_session_counter("skipped")
+            queue_action_feedback(kind="skipped", place_name=place_name)
+            st.toast("Skipped — find it again under Skipped.")
             st.rerun()
 
     with col_rate:
@@ -2002,6 +2261,12 @@ def render_discover(email: str) -> None:
                 google_place_id=place_id,
                 place_name=place_name,
                 status="rated",
+                rating=saved_rating,
+            )
+            bump_session_counter("rated")
+            queue_action_feedback(
+                kind="rated",
+                place_name=place_name,
                 rating=saved_rating,
             )
             st.toast(f"Saved {saved_rating:.1f}★ for {place_name}")
@@ -2025,6 +2290,7 @@ def render_rated_list(email: str) -> None:
         show_data_error(exc)
         return
     st.markdown('<div class="section-label">Your ratings</div>', unsafe_allow_html=True)
+    render_queued_feedback()
     if not rows:
         st.markdown(
             empty_state_html(
@@ -2089,6 +2355,12 @@ def render_rated_list(email: str) -> None:
                 status="rated",
                 rating=updated,
             )
+            bump_session_counter("rated")
+            queue_action_feedback(
+                kind="updated",
+                place_name=row["PLACE_NAME"] or "Unknown venue",
+                rating=updated,
+            )
             st.toast(f"Updated to {updated:.1f}★")
             st.rerun()
 
@@ -2100,6 +2372,7 @@ def render_skipped_list(email: str) -> None:
         show_data_error(exc)
         return
     st.markdown('<div class="section-label">Skipped &middot; not visited yet</div>', unsafe_allow_html=True)
+    render_queued_feedback()
     if not rows:
         st.markdown(
             empty_state_html(
@@ -2158,6 +2431,12 @@ def render_skipped_list(email: str) -> None:
                 status="rated",
                 rating=float(score),
             )
+            bump_session_counter("rated")
+            queue_action_feedback(
+                kind="rated",
+                place_name=row["PLACE_NAME"] or "Unknown venue",
+                rating=float(score),
+            )
             st.toast("Rating saved!")
             st.rerun()
 
@@ -2206,10 +2485,15 @@ def main() -> None:
             clear_discover_venue()
             st.session_state.pop("profile_draft", None)
             st.session_state.pop("profile_setup_step", None)
+            st.session_state.pop(WELCOME_FLAG_KEY, None)
+            st.session_state.pop(WELCOME_NAME_KEY, None)
             del st.session_state["user_email"]
             st.rerun()
 
     if not verify_data_access():
+        return
+
+    if render_profile_welcome():
         return
 
     tab_discover, tab_plan, tab_rated, tab_skipped, tab_profile = st.tabs(

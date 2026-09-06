@@ -268,7 +268,80 @@ ACTIVITY_OPTIONS = [
     "Experiences / tasting menus",
 ]
 
+# Soft Discover bias: profile activities → Google Places primary_type values.
+ACTIVITY_TO_PRIMARY_TYPES: dict[str, tuple[str, ...]] = {
+    "Dining": (
+        "restaurant",
+        "american_restaurant",
+        "italian_restaurant",
+        "mexican_restaurant",
+        "japanese_restaurant",
+        "chinese_restaurant",
+        "thai_restaurant",
+        "french_restaurant",
+        "greek_restaurant",
+        "seafood_restaurant",
+        "sushi_restaurant",
+        "steak_house",
+        "pizza_restaurant",
+        "brunch_restaurant",
+        "breakfast_restaurant",
+        "diner",
+    ),
+    "Coffee & cafes": ("cafe", "coffee_shop", "bakery", "bagel_shop", "juice_shop"),
+    "Wine bars": ("bar", "pub", "irish_pub"),
+    "Cocktail bars": ("bar", "pub", "irish_pub", "night_club"),
+    "Live music": ("bar", "night_club", "event_venue", "pub"),
+    "Rooftop / scenic": ("bar", "restaurant", "night_club", "american_restaurant"),
+    "Outdoor dining": (
+        "restaurant",
+        "cafe",
+        "american_restaurant",
+        "mexican_restaurant",
+        "brunch_restaurant",
+        "seafood_restaurant",
+    ),
+    "Casual bites": (
+        "fast_food_restaurant",
+        "sandwich_shop",
+        "pizza_restaurant",
+        "bagel_shop",
+        "bakery",
+        "cafe",
+        "diner",
+        "mexican_restaurant",
+    ),
+    "Fine dining": (
+        "steak_house",
+        "french_restaurant",
+        "seafood_restaurant",
+        "sushi_restaurant",
+        "japanese_restaurant",
+        "restaurant",
+    ),
+    "Nightlife / dancing": ("night_club", "bar", "event_venue"),
+    "Culture / galleries": ("cafe", "event_venue", "restaurant"),
+    "Wellness": ("juice_shop", "cafe", "coffee_shop"),
+    "Sports / active": ("sports_bar", "bar", "pub", "american_restaurant"),
+    "Experiences / tasting menus": (
+        "restaurant",
+        "steak_house",
+        "sushi_restaurant",
+        "french_restaurant",
+        "japanese_restaurant",
+        "bar",
+    ),
+}
+
 
 def neighbourhoods_for_city(city: str) -> list[str]:
     """Return forced neighbourhood options for a city (empty if unsupported)."""
     return list(NEIGHBOURHOODS_BY_CITY.get((city or "").strip(), []))
+
+
+def preferred_types_from_activities(activities: list[str] | None) -> list[str]:
+    """Flatten activity prefs into primary_type values for soft Discover ranking."""
+    preferred: set[str] = set()
+    for activity in activities or []:
+        preferred.update(ACTIVITY_TO_PRIMARY_TYPES.get(str(activity).strip(), ()))
+    return sorted(preferred)
