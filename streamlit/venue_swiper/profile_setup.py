@@ -50,6 +50,7 @@ STEP_KEY = "profile_setup_step"
 PREVIEW_OPEN_KEY = "apres_profile_preview_open"
 PREVIEW_IDX_KEY = "apres_preview_photo_idx"
 PARTNER_PREVIEW_KEY = "apres_partner_preview_open"
+PREVIEW_CLOSE_QP = "apres_close"
 SETUP_PARTNER_DIALOG_KEY = "apres_setup_partner_dialog"
 PROFILE_FLASH_KEY = "apres_profile_flash"
 
@@ -340,6 +341,21 @@ def _dismiss_profile_preview() -> None:
     st.session_state[PARTNER_PREVIEW_KEY] = False
 
 
+def _consume_preview_close_query() -> None:
+    """Honor ?apres_close=1 from the in-photo ✕ (iframe can't call st.rerun)."""
+    try:
+        raw = st.query_params.get(PREVIEW_CLOSE_QP)
+    except Exception:
+        return
+    if raw is None:
+        return
+    _dismiss_profile_preview()
+    try:
+        del st.query_params[PREVIEW_CLOSE_QP]
+    except Exception:
+        pass
+
+
 @st.dialog("Preview", width="small", on_dismiss=_dismiss_profile_preview)
 def _open_profile_preview_dialog(
     *,
@@ -354,11 +370,9 @@ def _open_profile_preview_dialog(
     open_to_dates: bool | None = None,
 ) -> None:
     """Modal profile preview — dismiss via X, Escape, or click outside."""
-    top_l, top_r = st.columns([5, 1])
-    with top_r:
-        if st.button("✕", key="preview_dialog_close", help="Close preview", use_container_width=True):
-            _dismiss_profile_preview()
-            st.rerun()
+    if st.button("Close preview", key="preview_dialog_close", use_container_width=True):
+        _dismiss_profile_preview()
+        st.rerun()
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -443,6 +457,9 @@ def render_profile_preview_card(
             if n > 1
             else ""
         )
+        close_btn = (
+            '<button type="button" class="close-x" id="closeX" aria-label="Close preview">×</button>'
+        )
         nav_script = f"""
 <script>
 (function() {{
@@ -475,13 +492,42 @@ def render_profile_preview_card(
       if (!e.changedTouches || !e.changedTouches.length) return;
       var dy = Math.abs(e.changedTouches[0].clientY - startY);
       var dx = Math.abs(e.changedTouches[0].clientX - startX);
-      if (dy > 12 || dx > 12) return; /* scroll / swipe — don't steal */
+      if (dy > 12 || dx > 12) return;
       e.preventDefault();
       show(idx + delta);
     }}, {{passive: false}});
   }}
   bind(document.getElementById("tapL"), -1);
   bind(document.getElementById("tapR"), 1);
+  function closePreview() {{
+    try {{
+      var root = window.parent.document;
+      var nodes = root.querySelectorAll(
+        '[data-testid="stDialog"] button[aria-label="Close"],' +
+        '[data-testid="stModal"] button[aria-label="Close"],' +
+        '[data-testid="stDialog"] button[kind="header"],' +
+        '[data-testid="stDialog"] [data-testid="stBaseButton-header"] button,' +
+        '[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button'
+      );
+      for (var i = 0; i < nodes.length; i++) {{
+        nodes[i].click();
+        return;
+      }}
+    }} catch (e) {{}}
+    try {{
+      var u = new URL(window.parent.location.href);
+      u.searchParams.set("{PREVIEW_CLOSE_QP}", "1");
+      window.parent.location.href = u.toString();
+    }} catch (e2) {{}}
+  }}
+  var cx = document.getElementById("closeX");
+  if (cx) {{
+    cx.addEventListener("click", function(e) {{
+      e.preventDefault();
+      e.stopPropagation();
+      closePreview();
+    }});
+  }}
 }})();
 </script>
 """
@@ -504,13 +550,23 @@ def render_profile_preview_card(
     color:rgba(248,230,210,.55); font:15px/1.4 system-ui,sans-serif; padding:1.5rem; text-align:center;
   }}
   .segs {{
-    position:absolute; top:10px; left:10px; right:10px; display:flex; gap:4px;
+    position:absolute; top:12px; left:12px; right:56px; display:flex; gap:4px;
     z-index:3; pointer-events:none;
   }}
   .seg {{ flex:1; height:3px; border-radius:99px; background:rgba(248,230,210,.28); }}
   .seg.on {{ background:#F8E6D2; }}
+  .close-x {{
+    position:absolute; top:8px; right:8px; z-index:8;
+    width:40px; height:40px; border:none; border-radius:999px;
+    background:rgba(44,26,16,0.55); color:#F8E6D2;
+    font-size:26px; line-height:1; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    -webkit-tap-highlight-color:transparent;
+    backdrop-filter: blur(6px);
+  }}
+  .close-x:active {{ background:rgba(44,26,16,0.75); }}
   .tap {{
-    position:absolute; top:0; bottom:0; width:50%; z-index:4; cursor:pointer;
+    position:absolute; top:48px; bottom:0; width:50%; z-index:4; cursor:pointer;
     -webkit-tap-highlight-color:transparent; touch-action:pan-y;
   }}
   .tap.left {{ left:0; }}
@@ -518,6 +574,7 @@ def render_profile_preview_card(
   .tap:active {{ background:rgba(248,230,210,.1); }}
 </style></head><body>
 <div class="stage">
+  {close_btn}
   <div class="segs" id="segs">{segments}</div>
   {img_html}
   {taps}
@@ -533,10 +590,40 @@ def render_profile_preview_card(
 <html><head><meta charset="utf-8"/>
 <style>
   html,body{{margin:0;background:#2C1A10}}
-  .empty{{height:{photo_h}px;display:flex;align-items:center;justify-content:center;
+  .wrap{{position:relative;height:{photo_h}px}}
+  .empty{{height:100%;display:flex;align-items:center;justify-content:center;
     color:rgba(248,230,210,.55);font:15px/1.4 system-ui,sans-serif;padding:1.5rem;text-align:center;
     border-radius:18px 18px 0 0}}
-</style></head><body><div class="empty">Add photos to fill this card</div></body></html>""",
+  .close-x{{position:absolute;top:8px;right:8px;z-index:8;width:40px;height:40px;border:none;
+    border-radius:999px;background:rgba(44,26,16,.55);color:#F8E6D2;font-size:26px;line-height:1;
+    cursor:pointer;display:flex;align-items:center;justify-content:center}}
+</style></head><body>
+<div class="wrap">
+  <button type="button" class="close-x" id="closeX" aria-label="Close preview">×</button>
+  <div class="empty">Add photos to fill this card</div>
+</div>
+<script>
+(function(){{
+  function closePreview(){{
+    try {{
+      var root = window.parent.document;
+      var nodes = root.querySelectorAll(
+        '[data-testid="stDialog"] button[aria-label="Close"],' +
+        '[data-testid="stDialog"] button[kind="header"]'
+      );
+      for (var i=0;i<nodes.length;i++){{ nodes[i].click(); return; }}
+    }} catch(e){{}}
+    try {{
+      var u = new URL(window.parent.location.href);
+      u.searchParams.set("{PREVIEW_CLOSE_QP}", "1");
+      window.parent.location.href = u.toString();
+    }} catch(e2){{}}
+  }}
+  var cx = document.getElementById("closeX");
+  if (cx) cx.addEventListener("click", function(e){{ e.preventDefault(); closePreview(); }});
+}})();
+</script>
+</body></html>""",
             height=photo_h,
             scrolling=False,
         )
@@ -1417,6 +1504,7 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
 def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     """Edit surface for users who already completed basic setup."""
     st.markdown(f"<style>{profile_setup_css()}</style>", unsafe_allow_html=True)
+    _consume_preview_close_query()
     st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
     st.caption("Photos save as you go. Use preview to see what others would see.")
 
