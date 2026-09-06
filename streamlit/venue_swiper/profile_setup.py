@@ -341,6 +341,37 @@ def _dismiss_profile_preview() -> None:
     st.session_state[PARTNER_PREVIEW_KEY] = False
 
 
+def _cleanup_preview_overlay_component() -> None:
+    """Remove a leftover parent overlay when preview is closed."""
+    import streamlit.components.v1 as components
+
+    components.html(
+        """<!DOCTYPE html><html><body style="margin:0">
+<script>
+(function(){
+  try {
+    var el = window.parent.document.getElementById("apres-preview-root");
+    if (el) el.remove();
+    var frame = window.frameElement;
+    if (frame) frame.style.cssText = "position:absolute;width:0;height:0;opacity:0;border:0;pointer-events:none;";
+  } catch (e) {}
+})();
+</script></body></html>""",
+        height=0,
+        scrolling=False,
+    )
+
+
+def _js_str(value: str) -> str:
+    """Escape for embedding inside a JS template literal."""
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("`", "\\`")
+        .replace("${", "\\${")
+    )
+
+
 def _consume_preview_close_query() -> None:
     """Honor ?apres_close=1 from the in-photo ✕ (iframe can't call st.rerun)."""
     try:
@@ -356,7 +387,6 @@ def _consume_preview_close_query() -> None:
         pass
 
 
-@st.dialog("Preview", width="small", on_dismiss=_dismiss_profile_preview)
 def _open_profile_preview_dialog(
     *,
     first_name: str,
@@ -369,7 +399,7 @@ def _open_profile_preview_dialog(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Full-width card in the dialog; Close preview is a real Streamlit button under it."""
+    """Centered phone-card overlay (not st.dialog — dialog CSS kept breaking layout)."""
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -381,14 +411,6 @@ def _open_profile_preview_dialog(
         relationship_status=relationship_status,
         open_to_dates=open_to_dates,
     )
-    if st.button(
-        "Close preview",
-        key="preview_dialog_close",
-        use_container_width=True,
-        type="primary",
-    ):
-        _dismiss_profile_preview()
-        st.rerun()
 
 
 def render_profile_preview_card(
@@ -403,7 +425,7 @@ def render_profile_preview_card(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Full-bleed photo + scrolling body. Close lives under the iframe in the dialog."""
+    """Inject a centered, phone-sized preview modal into the parent page."""
     import json
 
     import streamlit.components.v1 as components
@@ -426,257 +448,227 @@ def render_profile_preview_card(
     place = escape(" · ".join(place_bits)) if place_bits else "Somewhere great"
     status_line = escape(relationship_preview_line(relationship_status, open_to_dates))
     status_html = (
-        f'<div class="preview-status">{status_line}</div>' if status_line else ""
+        f'<div class="ap-status">{status_line}</div>' if status_line else ""
     )
 
     diet_items = [d for d in dietary if d and d != "None"]
     diet_html = _chips_html(diet_items) or (
-        '<span class="preview-chip muted">Open to anything</span>'
+        '<span class="ap-chip muted">Open to anything</span>'
         if "None" in dietary or not dietary
         else ""
     )
-    act_html = _chips_html(list(activities)) or (
-        '<span class="preview-chip muted">Still figuring it out</span>'
-    )
+    # Chip helper uses preview-chip class — rewrite for overlay namespace
+    diet_html = diet_html.replace("preview-chip", "ap-chip")
+    act_html = (_chips_html(list(activities)) or (
+        '<span class="ap-chip muted">Still figuring it out</span>'
+    )).replace("preview-chip", "ap-chip")
 
     uris: list[str] = []
     for photo in photos:
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
-
-    # Tall enough to fill a phone dialog; JS refines using viewport − title − Close button.
-    shell_h = 560
-    photo_h = 240
-    uri0 = uris[idx] if n and uris[idx] else ""
-    img_html = (
-        f'<img id="photo" src="{uri0}" alt=""/>'
-        if uri0
-        else '<div class="empty">Add photos to fill this card</div>'
-    )
-    segments = (
-        "".join(f'<span class="seg{" on" if i == idx else ""}"></span>' for i in range(n))
-        if n
-        else ""
-    )
-    segs_html = f'<div class="segs" id="segs">{segments}</div>' if n else ""
-    taps = (
-        '<div class="tap left" id="tapL" role="button" aria-label="Previous photo"></div>'
-        '<div class="tap right" id="tapR" role="button" aria-label="Next photo"></div>'
-        if n > 1
-        else ""
-    )
+    close_qp = json.dumps(PREVIEW_CLOSE_QP)
+    title_js = _js_str(title)
+    place_js = _js_str(place)
+    status_js = _js_str(status_html)
+    act_js = _js_str(act_html)
+    diet_js = _js_str(diet_html)
 
     components.html(
         f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
-<style>
-  html, body {{
-    margin: 0; padding: 0; width: 100%; height: 100%;
-    background: #2C1A10;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    color: #F8E6D2;
-    overflow: hidden;
-  }}
-  .shell {{
-    width: 100%;
-    height: {shell_h}px;
-    display: flex;
-    flex-direction: column;
-    background: #2C1A10;
-    overflow: hidden;
-    border-radius: 16px;
-    box-sizing: border-box;
-  }}
-  .stage {{
-    position: relative;
-    flex: 0 0 {photo_h}px;
-    height: {photo_h}px;
-    width: 100%;
-    background: #2C1A10;
-    overflow: hidden;
-    border-radius: 16px 16px 0 0;
-  }}
-  .stage img {{
-    width: 100%; height: 100%; object-fit: cover; object-position: center 18%;
-    display: block; pointer-events: none; user-select: none; -webkit-user-drag: none;
-  }}
-  .empty {{
-    display: flex; align-items: center; justify-content: center; height: 100%;
-    color: rgba(248,230,210,.55); font: 15px/1.4 system-ui, sans-serif;
-    padding: 1.5rem; text-align: center;
-  }}
-  .segs {{
-    position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 4px;
-    z-index: 3; pointer-events: none;
-  }}
-  .seg {{ flex: 1; height: 3px; border-radius: 99px; background: rgba(248,230,210,.28); }}
-  .seg.on {{ background: #F8E6D2; }}
-  .tap {{
-    position: absolute; top: 0; bottom: 0; width: 50%; z-index: 4; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
-  }}
-  .tap.left {{ left: 0; }}
-  .tap.right {{ right: 0; }}
-  .tap:active {{ background: rgba(248,230,210,.1); }}
-  .body {{
-    flex: 1 1 auto;
-    min-height: 0;
-    height: 0;
-    width: 100%;
-    overflow-x: hidden;
-    overflow-y: scroll;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
-    touch-action: pan-y;
-    background: linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
-    padding: 0.9rem 1rem 1.4rem;
-    box-sizing: border-box;
-    border-radius: 0 0 16px 16px;
-  }}
-  .preview-name {{
-    font-family: Georgia, "Times New Roman", serif;
-    font-size: 26px; font-weight: 500; font-style: italic;
-    color: #F8E6D2; line-height: 1.1; margin: 0 0 0.25rem;
-  }}
-  .preview-place {{
-    font-size: 13px; color: rgba(248,230,210,0.72); margin: 0 0 0.3rem;
-  }}
-  .preview-status {{
-    font-size: 12px; color: rgba(211,163,69,0.95); margin: 0 0 0.65rem;
-  }}
-  .preview-group-label {{
-    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
-    color: rgba(248,230,210,0.45); margin: 0.45rem 0 0.28rem;
-  }}
-  .preview-chips {{ display: flex; flex-wrap: wrap; gap: 0.3rem; }}
-  .preview-chip {{
-    display: inline-flex; align-items: center; min-height: 32px;
-    padding: 0.3rem 0.7rem; border-radius: 999px;
-    background: rgba(248,230,210,0.1); border: 1px solid rgba(248,230,210,0.14);
-    color: #F8E6D2; font-size: 13px;
-  }}
-  .preview-chip.muted {{ color: rgba(248,230,210,0.55); font-style: italic; }}
-</style></head><body>
-<div class="shell" id="shell">
-  <div class="stage" id="stage">
-    {segs_html}
-    {img_html}
-    {taps}
-  </div>
-  <div class="body" id="body">
-    <div class="preview-name">{title}</div>
-    <div class="preview-place">{place}</div>
-    {status_html}
-    <div class="preview-group-label">Into</div>
-    <div class="preview-chips">{act_html}</div>
-    <div class="preview-group-label">Dietary</div>
-    <div class="preview-chips">{diet_html}</div>
-    <div style="height:16px" aria-hidden="true"></div>
-  </div>
-</div>
+<html><head><meta charset="utf-8"/></head>
+<body style="margin:0;padding:0;overflow:hidden">
 <script>
 (function() {{
   var URIS = {uris_json};
   var idx = {idx};
-  var img = document.getElementById("photo");
+  var CLOSE_QP = {close_qp};
+  var doc = window.parent.document;
+  var win = window.parent;
 
-  function fitToViewport() {{
-    var parentH = 700;
+  function tearDown() {{
+    var old = doc.getElementById("apres-preview-root");
+    if (old) old.remove();
+  }}
+
+  function closePreview() {{
+    tearDown();
     try {{
-      parentH = window.parent.innerHeight
-        || window.parent.document.documentElement.clientHeight
-        || 700;
+      var u = new URL(win.location.href);
+      u.searchParams.set(CLOSE_QP, "1");
+      win.location.href = u.toString();
     }} catch (e) {{
-      parentH = window.innerHeight || 700;
+      try {{ win.location.reload(); }} catch (e2) {{}}
     }}
-    // Fill the dialog: viewport dialog max (~92%) minus title + Close button + padding.
-    // Do NOT use a tiny fraction — that left the empty cream gap in screenshots.
-    var avail = Math.floor(parentH * 0.92 - 140);
-    avail = Math.max(380, Math.min(avail, 620));
-    var photoH = avail < 420 ? 180 : (avail < 520 ? 220 : 260);
-    var stage = document.getElementById("stage");
-    var shell = document.getElementById("shell");
-    if (stage) {{
-      stage.style.flex = "0 0 " + photoH + "px";
-      stage.style.height = photoH + "px";
-    }}
-    if (shell) {{
-      shell.style.height = avail + "px";
-      shell.style.width = "100%";
-    }}
-    var frame = window.frameElement;
-    if (frame) {{
-      frame.style.height = avail + "px";
-      frame.style.width = "100%";
-      frame.setAttribute("height", String(avail));
-      frame.setAttribute("width", "100%");
-      try {{
-        var wrap = frame.parentElement;
-        while (wrap && wrap !== window.parent.document.body) {{
-          wrap.style.width = "100%";
-          wrap.style.maxWidth = "100%";
-          if (wrap.getAttribute && wrap.getAttribute("data-testid") === "stCustomComponentV1") {{
-            wrap.style.height = avail + "px";
-            wrap.style.overflow = "hidden";
-            break;
-          }}
-          wrap = wrap.parentElement;
-        }}
-      }} catch (e2) {{}}
-    }}
-    try {{
-      var doc = window.parent.document;
-      var dlg = doc.querySelector('[data-testid="stDialog"]');
-      if (dlg) {{
-        dlg.style.background = "#2C1A10";
-        dlg.style.padding = "0.55rem 0.65rem 0.75rem";
-        dlg.style.width = "min(100vw - 1.25rem, 28rem)";
-        dlg.style.maxWidth = "calc(100vw - 1.25rem)";
-        var nodes = dlg.querySelectorAll("div, section");
-        for (var i = 0; i < Math.min(nodes.length, 40); i++) {{
-          var bg = window.parent.getComputedStyle(nodes[i]).backgroundColor;
-          if (bg && (bg.indexOf("248") >= 0 || bg.indexOf("255") >= 0 || bg === "rgb(255, 255, 255)")) {{
-            nodes[i].style.background = "#2C1A10";
-          }}
-        }}
-      }}
-    }} catch (e3) {{}}
   }}
-  function blurBackdrop() {{
-    try {{
-      var doc = window.parent.document;
-      var overlays = doc.querySelectorAll(
-        '[data-testid="stDialogOverlay"], .react-aria-ModalOverlay'
-      );
-      overlays.forEach(function(el) {{
-        el.style.webkitBackdropFilter = "blur(14px) saturate(1.05)";
-        el.style.backdropFilter = "blur(14px) saturate(1.05)";
-        el.style.background = "rgba(44, 26, 16, 0.42)";
-      }});
-    }} catch (e) {{}}
-  }}
-  fitToViewport();
-  blurBackdrop();
-  setTimeout(fitToViewport, 50);
-  setTimeout(blurBackdrop, 50);
-  setTimeout(fitToViewport, 250);
-  try {{
-    window.parent.addEventListener("resize", fitToViewport);
-  }} catch (e4) {{}}
-  window.addEventListener("resize", fitToViewport);
 
-  function show(next) {{
-    if (!URIS.length) return;
-    idx = (next % URIS.length + URIS.length) % URIS.length;
-    if (img && URIS[idx]) img.setAttribute("src", URIS[idx]);
-    var segs = document.querySelectorAll("#segs .seg");
-    for (var i = 0; i < segs.length; i++) {{
-      if (i === idx) segs[i].classList.add("on");
-      else segs[i].classList.remove("on");
+  tearDown();
+
+  var root = doc.createElement("div");
+  root.id = "apres-preview-root";
+  root.innerHTML = `
+    <style>
+      #apres-preview-root {{
+        position: fixed; inset: 0; z-index: 2147483000;
+        display: flex; align-items: center; justify-content: center;
+        padding: max(12px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px));
+        box-sizing: border-box;
+        background: rgba(44, 26, 16, 0.48);
+        -webkit-backdrop-filter: blur(14px) saturate(1.05);
+        backdrop-filter: blur(14px) saturate(1.05);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }}
+      #apres-preview-root .ap-card {{
+        width: min(100%, 400px);
+        height: min(85dvh, 680px);
+        max-height: min(85vh, 680px);
+        display: flex; flex-direction: column;
+        background: #2C1A10;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 24px 64px rgba(0,0,0,0.35);
+        border: 1px solid rgba(248,230,210,0.12);
+      }}
+      #apres-preview-root .ap-stage {{
+        position: relative; flex: 0 0 240px;
+        height: 240px;
+        background: #2C1A10; overflow: hidden;
+      }}
+      @media (max-height: 700px) {{
+        #apres-preview-root .ap-stage {{ flex-basis: 200px; height: 200px; }}
+      }}
+      #apres-preview-root .ap-stage img {{
+        width: 100%; height: 100%; object-fit: cover; object-position: center 18%;
+        display: block; pointer-events: none; user-select: none; -webkit-user-drag: none;
+      }}
+      #apres-preview-root .ap-empty {{
+        height: 100%; display: flex; align-items: center; justify-content: center;
+        color: rgba(248,230,210,.55); font-size: 15px; padding: 1.5rem; text-align: center;
+      }}
+      #apres-preview-root .ap-segs {{
+        position: absolute; top: 12px; left: 12px; right: 12px;
+        display: flex; gap: 4px; z-index: 3; pointer-events: none;
+      }}
+      #apres-preview-root .ap-seg {{
+        flex: 1; height: 3px; border-radius: 99px; background: rgba(248,230,210,.28);
+      }}
+      #apres-preview-root .ap-seg.on {{ background: #F8E6D2; }}
+      #apres-preview-root .ap-tap {{
+        position: absolute; top: 0; bottom: 0; width: 50%; z-index: 4; cursor: pointer;
+        -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+      }}
+      #apres-preview-root .ap-tap.left {{ left: 0; }}
+      #apres-preview-root .ap-tap.right {{ right: 0; }}
+      #apres-preview-root .ap-body {{
+        flex: 1 1 auto; min-height: 0;
+        overflow-x: hidden; overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        background: linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
+        padding: 0.9rem 1rem 1rem;
+        color: #F8E6D2;
+      }}
+      #apres-preview-root .ap-name {{
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 28px; font-weight: 500; font-style: italic;
+        line-height: 1.1; margin: 0 0 0.25rem;
+      }}
+      #apres-preview-root .ap-place {{
+        font-size: 13px; color: rgba(248,230,210,0.72); margin: 0 0 0.3rem;
+      }}
+      #apres-preview-root .ap-status {{
+        font-size: 12px; color: rgba(211,163,69,0.95); margin: 0 0 0.65rem;
+      }}
+      #apres-preview-root .ap-label {{
+        font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+        color: rgba(248,230,210,0.45); margin: 0.45rem 0 0.28rem;
+      }}
+      #apres-preview-root .ap-chips {{ display: flex; flex-wrap: wrap; gap: 0.3rem; }}
+      #apres-preview-root .ap-chip {{
+        display: inline-flex; align-items: center; min-height: 32px;
+        padding: 0.3rem 0.7rem; border-radius: 999px;
+        background: rgba(248,230,210,0.1); border: 1px solid rgba(248,230,210,0.14);
+        color: #F8E6D2; font-size: 13px;
+      }}
+      #apres-preview-root .ap-chip.muted {{ color: rgba(248,230,210,0.55); font-style: italic; }}
+      #apres-preview-root .ap-footer {{
+        flex: 0 0 auto;
+        padding: 0.65rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+        background: #5E3F31;
+        border-top: 1px solid rgba(248,230,210,0.1);
+      }}
+      #apres-preview-root .ap-close {{
+        display: block; width: 100%; box-sizing: border-box;
+        min-height: 48px; border: none; border-radius: 12px;
+        background: #F8E6D2; color: #2C1A10;
+        font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        cursor: pointer; -webkit-tap-highlight-color: transparent;
+      }}
+      #apres-preview-root .ap-close:active {{ background: #E8D4BC; }}
+    </style>
+    <div class="ap-card" role="dialog" aria-modal="true" aria-label="Profile preview">
+      <div class="ap-stage" id="apStage">
+        <div class="ap-segs" id="apSegs"></div>
+        <div class="ap-empty" id="apEmpty" style="display:none">Add photos to fill this card</div>
+        <img id="apPhoto" alt="" style="display:none"/>
+        <div class="ap-tap left" id="apTapL" aria-label="Previous photo"></div>
+        <div class="ap-tap right" id="apTapR" aria-label="Next photo"></div>
+      </div>
+      <div class="ap-body">
+        <div class="ap-name">{title_js}</div>
+        <div class="ap-place">{place_js}</div>
+        {status_js}
+        <div class="ap-label">Into</div>
+        <div class="ap-chips">{act_js}</div>
+        <div class="ap-label">Dietary</div>
+        <div class="ap-chips">{diet_js}</div>
+      </div>
+      <div class="ap-footer">
+        <button type="button" class="ap-close" id="apClose">Close preview</button>
+      </div>
+    </div>
+  `;
+  doc.body.appendChild(root);
+
+  var photo = root.querySelector("#apPhoto");
+  var empty = root.querySelector("#apEmpty");
+  var segs = root.querySelector("#apSegs");
+  var tapL = root.querySelector("#apTapL");
+  var tapR = root.querySelector("#apTapR");
+
+  function renderSegs() {{
+    segs.innerHTML = "";
+    if (URIS.length < 2) {{ segs.style.display = "none"; return; }}
+    segs.style.display = "flex";
+    for (var i = 0; i < URIS.length; i++) {{
+      var s = doc.createElement("span");
+      s.className = "ap-seg" + (i === idx ? " on" : "");
+      segs.appendChild(s);
     }}
   }}
-  function bind(el, delta) {{
+  function showPhoto() {{
+    if (!URIS.length || !URIS[idx]) {{
+      if (photo) photo.style.display = "none";
+      if (empty) empty.style.display = "flex";
+      if (tapL) tapL.style.display = "none";
+      if (tapR) tapR.style.display = "none";
+      return;
+    }}
+    if (empty) empty.style.display = "none";
+    if (photo) {{
+      photo.style.display = "block";
+      photo.setAttribute("src", URIS[idx]);
+    }}
+    if (tapL) tapL.style.display = URIS.length > 1 ? "block" : "none";
+    if (tapR) tapR.style.display = URIS.length > 1 ? "block" : "none";
+    renderSegs();
+  }}
+  function step(delta) {{
+    if (URIS.length < 2) return;
+    idx = (idx + delta + URIS.length) % URIS.length;
+    showPhoto();
+  }}
+  function bindTap(el, delta) {{
     if (!el) return;
     var startY = 0, startX = 0;
     el.addEventListener("touchstart", function(e) {{
@@ -684,25 +676,43 @@ def render_profile_preview_card(
       startY = e.touches[0].clientY;
       startX = e.touches[0].clientX;
     }}, {{passive: true}});
-    el.addEventListener("click", function(e) {{
-      e.preventDefault();
-      show(idx + delta);
-    }});
+    el.addEventListener("click", function(e) {{ e.preventDefault(); step(delta); }});
     el.addEventListener("touchend", function(e) {{
       if (!e.changedTouches || !e.changedTouches.length) return;
       var dy = Math.abs(e.changedTouches[0].clientY - startY);
       var dx = Math.abs(e.changedTouches[0].clientX - startX);
       if (dy > 12 || dx > 12) return;
       e.preventDefault();
-      show(idx + delta);
+      step(delta);
     }}, {{passive: false}});
   }}
-  bind(document.getElementById("tapL"), -1);
-  bind(document.getElementById("tapR"), 1);
+  bindTap(tapL, -1);
+  bindTap(tapR, 1);
+  showPhoto();
+
+  root.querySelector("#apClose").addEventListener("click", function(e) {{
+    e.preventDefault();
+    closePreview();
+  }});
+  root.addEventListener("click", function(e) {{
+    if (e.target === root) closePreview();
+  }});
+  function onKey(e) {{
+    if (e.key === "Escape") closePreview();
+  }}
+  win.addEventListener("keydown", onKey);
+
+  // Hide this measuring iframe
+  try {{
+    var frame = window.frameElement;
+    if (frame) {{
+      frame.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;border:0;";
+    }}
+  }} catch (e3) {{}}
 }})();
 </script>
 </body></html>""",
-        height=shell_h,
+        height=1,
         scrolling=False,
     )
 
@@ -827,39 +837,12 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Preview dialog: dark shell, full-bleed card, Close button under the card. */
+/* Partner request dialog only — do not restyle layout/position (breaks centering). */
 div[data-testid="stDialog"],
 div[data-testid="stModal"] {
     background: #2C1A10 !important;
     color: #F8E6D2 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
-    max-height: min(92dvh, 92vh) !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
-    padding: 0.55rem 0.65rem 0.75rem !important;
-    width: min(100vw - 1.25rem, 28rem) !important;
-    max-width: calc(100vw - 1.25rem) !important;
-}
-/* Blur page behind any open dialog (preview / partner). */
-body:has([data-testid="stDialog"]) [data-testid="stAppViewContainer"],
-body:has([data-testid="stModal"]) [data-testid="stAppViewContainer"],
-html:has([data-testid="stDialog"]) [data-testid="stAppViewContainer"] {
-    filter: blur(10px) saturate(0.92);
-    transition: filter 180ms ease;
-}
-[data-testid="stDialogOverlay"],
-.react-aria-ModalOverlay,
-div[data-radix-portal] > div[style*="position: fixed"],
-[data-testid="stDialog"]::backdrop,
-dialog::backdrop {
-    background: rgba(44, 26, 16, 0.42) !important;
-    -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
-    backdrop-filter: blur(14px) saturate(1.05) !important;
-}
-div[data-testid="stDialog"] [data-testid="stVerticalBlock"] {
-    max-height: none !important;
-    overflow: visible !important;
-    gap: 0.45rem !important;
 }
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
 div[data-testid="stDialog"] h2,
@@ -872,41 +855,6 @@ div[data-testid="stDialog"] [data-testid="stBaseButton-header"],
 div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button {
     color: #F8E6D2 !important;
     opacity: 1 !important;
-}
-/* Close preview under the card */
-div[data-testid="stDialog"] button[kind="primary"],
-div[data-testid="stDialog"] button[data-testid="baseButton-primary"],
-div[data-testid="stDialog"] [data-testid="stBaseButton-primary"],
-div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button {
-    background: #F8E6D2 !important;
-    border: none !important;
-    color: #2C1A10 !important;
-    border-radius: 12px !important;
-    min-height: 44px !important;
-    font-weight: 600 !important;
-}
-div[data-testid="stDialog"] button[kind="primary"] p,
-div[data-testid="stDialog"] button[kind="primary"] span,
-div[data-testid="stDialog"] button[data-testid="baseButton-primary"] p,
-div[data-testid="stDialog"] button[data-testid="baseButton-primary"] span,
-div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] p,
-div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] span,
-div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button p,
-div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button span {
-    color: #2C1A10 !important;
-}
-div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
-    margin: 0 !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    overflow: hidden !important;
-}
-div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
-    display: block !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    border: none !important;
-    background: #2C1A10 !important;
 }
 .preview-body-card .preview-name {
     font-family: 'Cormorant Garamond', Georgia, serif;
@@ -1605,6 +1553,9 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         st.session_state[PREVIEW_OPEN_KEY] = True
         st.session_state[PREVIEW_IDX_KEY] = 0
         preview_open = True
+
+    if not preview_open and not st.session_state.get(PARTNER_PREVIEW_KEY):
+        _cleanup_preview_overlay_component()
 
     if preview_open:
         # Prefer live form values when present (from prior run / current widgets).
