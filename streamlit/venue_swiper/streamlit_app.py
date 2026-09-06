@@ -2650,7 +2650,6 @@ def main() -> None:
     if render_profile_welcome():
         return
 
-    log_event("main_tabs", "Rendering main tabs", email=email)
     tab_discover, tab_plan, tab_rated, tab_skipped, tab_profile = st.tabs(
         ["Discover", "Plan", "Rated", "Skipped", "Profile"]
     )
