@@ -151,7 +151,7 @@ def render_location_picker(*, borough: str) -> UserLocation | None:
 
     elif mode == MODE_ON_MAP:
         if not HAS_FOLIUM:
-            st.caption("Map unavailable — switch to **Near me**.")
+            st.caption("Map unavailable. Switch to **Near me**.")
         else:
             st.caption("Tap anywhere to set your starting point.")
             init_lat = saved.lat if saved else center_lat

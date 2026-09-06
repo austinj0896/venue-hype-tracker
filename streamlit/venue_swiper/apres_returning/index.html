@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 1px; overflow: hidden; background: transparent; }
+  </style>
+</head>
+<body>
+  <script>
+    const STORAGE_KEY = "apres_returning_user";
+
+    function send(type, data) {
+      window.parent.postMessage(
+        Object.assign({ isStreamlitMessage: true, type: type }, data),
+        "*"
+      );
+    }
+
+    function setReady() {
+      send("streamlit:componentReady", { apiVersion: 1 });
+      send("streamlit:setFrameHeight", { height: 1 });
+    }
+
+    function setValue(value) {
+      send("streamlit:setComponentValue", { value: value, dataType: "json" });
+    }
+
+    function handle(args) {
+      const mode = (args && args.mode) || "read";
+      if (mode === "write") {
+        try { localStorage.setItem(STORAGE_KEY, "1"); } catch (e) {}
+        setValue({ returning: true, wrote: true });
+        return;
+      }
+      let returning = false;
+      try { returning = localStorage.getItem(STORAGE_KEY) === "1"; } catch (e) {}
+      setValue({ returning: returning });
+    }
+
+    setReady();
+    window.addEventListener("message", function (event) {
+      const data = event.data;
+      if (!data || data.type !== "streamlit:render") return;
+      handle(data.args || {});
+    });
+  </script>
+</body>
+</html>

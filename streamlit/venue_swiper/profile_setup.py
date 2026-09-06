@@ -96,7 +96,7 @@ def _neighbourhood_select(
         st.caption("Choose a city to pick a neighbourhood.")
         return None
     if current and current not in hoods:
-        st.caption(f"Previously saved “{current}” isn’t in the list — please reselect.")
+        st.caption(f"Previously saved “{current}” isn’t in the list. Please reselect.")
         current = ""
     index = hoods.index(current) if current in hoods else 0
     return st.selectbox(label, hoods, index=index, key=key)
@@ -147,8 +147,8 @@ def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
                 draft["_photo_upload_marker"] = marker
                 _save_draft(draft)
                 st.image(photo_bytes(b64), width=96)
-                st.caption("Photo ready — it’ll save with your profile.")
-    st.caption("JPG, PNG, or WebP · under 5 MB · cropped to a square-friendly size.")
+                st.caption("Photo ready. It’ll save with your profile.")
+    st.caption("JPG, PNG, or WebP · under 5 MB · resized to fit.")
 
 
 def _progress_html(step: int, total: int = 4) -> str:
@@ -274,7 +274,7 @@ def render_profile_setup(email: str, existing: dict[str, Any] | None = None) -> 
         '<div class="profile-panel">'
         '<div class="profile-panel-title">Build your taste profile</div>'
         '<div class="profile-panel-sub">'
-        "A few questions — once — so every recommendation fits you. "
+        "A few questions, once, so recommendations fit you. "
         f"Signed in as {escape(email)}."
         "</div></div>",
         unsafe_allow_html=True,
@@ -498,7 +498,7 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
     clear_profile_cache()
     st.session_state["just_completed_profile"] = True
     st.session_state["just_completed_profile_name"] = str(draft.get("first_name") or "").strip()
-    st.toast("Profile saved — welcome to Après.")
+    st.toast("Profile saved. Welcome to Après.")
     st.rerun()
 
 
@@ -507,6 +507,18 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
     st.caption("Update your taste profile anytime. Ratings and plans stay as they are.")
     st.markdown(f"<style>{profile_setup_css()}</style>", unsafe_allow_html=True)
+
+    st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="empty-state" style="margin-top:0;">'
+        '<div class="empty-state-eyebrow">Extended profile</div>'
+        '<div class="empty-state-title">Food & drink · Activities</div>'
+        '<div class="empty-state-mark"></div>'
+        "<p>Core setup is done. Deeper buckets (cuisines, adventure level, deal-breakers) "
+        "will live here so recommendations can get sharper over time.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     draft = _get_draft(email, profile)
     _render_photo_picker(draft, key_prefix="edit")
@@ -603,7 +615,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
             st.error(f"Could not save: {exc}")
             return
         if not is_profile_complete(saved):
-            st.error("Profile is still incomplete — check required fields.")
+            st.error("Profile is still incomplete. Check required fields.")
             return
         st.session_state.pop(DRAFT_KEY, None)
         st.toast("Profile updated.")

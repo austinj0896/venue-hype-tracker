@@ -1,7 +1,7 @@
 """01 · ONBOARDING — splash + three pre-signup slides (Après-branded).
 
-Deck intent: sell the product before account creation. No passwords / platform
-connects here — those stay out of scope.
+Deck intent: sell the product before account creation. Returning users can
+Sign in and skip slides. Soft email auth only (no OTP yet).
 """
 
 from __future__ import annotations
@@ -11,28 +11,29 @@ from html import escape
 import streamlit as st
 
 from app_log import log_event
+from apres_returning import mark_returning, read_returning_flag
 
 ONBOARDING_DONE_KEY = "apres_onboarding_done"
 ONBOARDING_STEP_KEY = "apres_onboarding_step"
+LOGIN_MODE_KEY = "apres_login_mode"  # "new" | "returning"
 
-# step 0 = splash, 1–3 = marketing slides, then done → email login
 _SLIDES = (
     {
         "eyebrow": "Slide 1",
-        "title": "Rate what you’ve tried.",
-        "body": "Skip what you haven’t. Après learns your taste — then plans around it.",
+        "title": "Tell us what you love.",
+        "body": "Rate places you’ve been. Your scores become the base for better nights out.",
         "cta": "Next",
     },
     {
         "eyebrow": "Slide 2",
-        "title": "Every detail arranged.",
-        "body": "Hours, vibes, and walkable stops — so the night feels intentional, not improvised.",
+        "title": "Skip what you don’t.",
+        "body": "Haven’t been yet? Park it and come back when you have. No pressure to invent an opinion.",
         "cta": "Next",
     },
     {
         "eyebrow": "Slide 3",
-        "title": "Your city, your terms.",
-        "body": "Neighbourhood, diet, and what you actually enjoy. Built once — used every time you plan.",
+        "title": "We’ll line up the rest.",
+        "body": "City, neighbourhood, diet, and activities. Answer once, then Discover and dates use it.",
         "cta": "Create account",
     },
 )
@@ -41,13 +42,13 @@ _SLIDES = (
 def onboarding_css() -> str:
     return """
 .ob-splash {
-    min-height: 62vh;
+    min-height: 58vh;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 2.5rem 1rem 1.5rem;
+    padding: 2.5rem 1rem 1.25rem;
     animation: apres-fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .ob-mark {
@@ -60,11 +61,11 @@ def onboarding_css() -> str:
     margin: 0 0 0.75rem;
 }
 .ob-tagline {
-    font-size: 13px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #B09080;
+    font-size: 15px;
+    line-height: 1.45;
+    color: #7A5B48;
     margin: 0 0 1.75rem;
+    max-width: 16rem;
 }
 .ob-pulse {
     width: 10px;
@@ -89,7 +90,7 @@ def onboarding_css() -> str:
         inset 0 1px 0 rgba(248,230,210,0.1);
     padding: 1.75rem 1.35rem 1.45rem;
     margin: 0.75rem 0 1rem;
-    min-height: 280px;
+    min-height: 260px;
     animation: apres-card-in 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .ob-eyebrow {
@@ -102,11 +103,11 @@ def onboarding_css() -> str:
 }
 .ob-title {
     font-family: 'Cormorant Garamond', Georgia, serif;
-    font-size: clamp(30px, 8vw, 38px);
+    font-size: clamp(28px, 7.5vw, 36px);
     font-weight: 500;
     font-style: italic;
     color: #F8E6D2;
-    line-height: 1.12;
+    line-height: 1.15;
     letter-spacing: -0.015em;
     margin: 0 0 0.85rem;
 }
@@ -131,13 +132,11 @@ def onboarding_css() -> str:
     background: #D3A345;
     box-shadow: 0 0 0 3px rgba(211, 163, 69, 0.22);
 }
-.ob-principle {
-    font-size: 12px;
-    line-height: 1.5;
-    color: #B09080;
-    font-style: italic;
-    margin: 0.35rem 0 1rem;
+.ob-signin-hint {
     text-align: center;
+    font-size: 13px;
+    color: #7A5B48;
+    margin: 0.75rem 0 0;
 }
 """
 
@@ -146,25 +145,50 @@ def onboarding_complete() -> bool:
     return bool(st.session_state.get(ONBOARDING_DONE_KEY))
 
 
+def go_to_sign_in(*, returning: bool = True) -> None:
+    st.session_state[ONBOARDING_DONE_KEY] = True
+    st.session_state.pop(ONBOARDING_STEP_KEY, None)
+    st.session_state[LOGIN_MODE_KEY] = "returning" if returning else "new"
+    log_event("onboarding", "Sign in path (skip slides)" if returning else "Create account path")
+    st.rerun()
+
+
 def render_onboarding() -> None:
-    """Splash + 3 slides. Returns only after user finishes (via rerun to login)."""
     st.markdown(f"<style>{onboarding_css()}</style>", unsafe_allow_html=True)
+
+    # Device memory: returning visitors skip marketing slides.
+    if "apres_returning_checked" not in st.session_state:
+        flag = read_returning_flag()
+        if flag is None:
+            # Component still loading; show splash shell without blocking forever.
+            pass
+        else:
+            st.session_state["apres_returning_checked"] = True
+            if flag and not st.session_state.get(ONBOARDING_DONE_KEY):
+                st.session_state[ONBOARDING_DONE_KEY] = True
+                st.session_state[LOGIN_MODE_KEY] = "returning"
+                log_event("onboarding", "Returning device; skip slides")
+                st.rerun()
+
     step = int(st.session_state.get(ONBOARDING_STEP_KEY, 0))
 
     if step <= 0:
         st.markdown(
             '<div class="ob-splash">'
             '<div class="ob-mark">Après</div>'
-            '<div class="ob-tagline">Find what comes next.</div>'
+            '<div class="ob-tagline">Your evening, sorted.</div>'
             '<div class="ob-pulse" aria-hidden="true"></div>'
             "</div>",
             unsafe_allow_html=True,
         )
-        st.caption("First impressions · then your account")
         if st.button("Get started", type="primary", use_container_width=True, key="ob_splash"):
             st.session_state[ONBOARDING_STEP_KEY] = 1
+            st.session_state[LOGIN_MODE_KEY] = "new"
             log_event("onboarding", "Splash → slide 1")
             st.rerun()
+        st.markdown('<p class="ob-signin-hint">Already have an account?</p>', unsafe_allow_html=True)
+        if st.button("Sign in", use_container_width=True, key="ob_splash_signin"):
+            go_to_sign_in(returning=True)
         return
 
     idx = max(1, min(3, step)) - 1
@@ -181,18 +205,12 @@ def render_onboarding() -> None:
         f"</div>",
         unsafe_allow_html=True,
     )
-    if idx == 0:
-        st.markdown(
-            '<p class="ob-principle">Both of you bring a taste. Après finds the night.</p>',
-            unsafe_allow_html=True,
-        )
 
     cols = st.columns([1, 1] if idx > 0 else [1])
     if idx > 0:
         with cols[0]:
             if st.button("Back", use_container_width=True, key=f"ob_back_{idx}"):
-                st.session_state[ONBOARDING_STEP_KEY] = idx  # previous (1-based idx → step)
-                log_event("onboarding", f"Back to step {idx}")
+                st.session_state[ONBOARDING_STEP_KEY] = idx
                 st.rerun()
         with cols[1]:
             if st.button(slide["cta"], type="primary", use_container_width=True, key=f"ob_next_{idx}"):
@@ -201,15 +219,27 @@ def render_onboarding() -> None:
         if st.button(slide["cta"], type="primary", use_container_width=True, key=f"ob_next_{idx}"):
             _advance(idx)
 
+    if idx == 2:
+        st.markdown('<p class="ob-signin-hint">Already with Après?</p>', unsafe_allow_html=True)
+        if st.button("Sign in instead", use_container_width=True, key="ob_slide3_signin"):
+            go_to_sign_in(returning=True)
+
 
 def _advance(idx: int) -> None:
-    """idx is 0-based slide index (0, 1, 2)."""
     if idx >= 2:
         st.session_state[ONBOARDING_DONE_KEY] = True
         st.session_state.pop(ONBOARDING_STEP_KEY, None)
-        log_event("onboarding", "Completed; showing email login")
+        st.session_state[LOGIN_MODE_KEY] = "new"
+        log_event("onboarding", "Completed slides; create account")
     else:
-        next_step = idx + 2  # slide 0 → step 2, slide 1 → step 3
-        st.session_state[ONBOARDING_STEP_KEY] = next_step
-        log_event("onboarding", f"Advance to slide {next_step}")
+        st.session_state[ONBOARDING_STEP_KEY] = idx + 2
+        log_event("onboarding", f"Advance to slide {idx + 2}")
     st.rerun()
+
+
+def remember_device_after_login() -> None:
+    """Call after a successful email login so next visit skips slides."""
+    try:
+        mark_returning()
+    except Exception:
+        pass

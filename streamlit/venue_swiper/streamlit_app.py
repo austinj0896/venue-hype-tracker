@@ -1,6 +1,6 @@
 """
 Après — discover and rate food & drink spots by neighborhood.
-Tagline: Find what comes next.
+Tagline: Your evening, sorted.
 
 Runs on **Neon Postgres** (Streamlit Community Cloud) or **Snowflake** (SiS / legacy Cloud).
 """
@@ -48,6 +48,7 @@ from date_planner import (
 from geo import filter_by_radius, miles_to_meters
 from location_ui import render_location_picker
 from app_log import log_event, show_recent_errors
+from greeting import personalized_greeting
 from onboarding import onboarding_complete, render_onboarding
 from places_data import fetch_community_ratings, fetch_venues_with_coords
 from profile_options import preferred_types_from_activities
@@ -1126,16 +1127,16 @@ def queue_action_feedback(
         stars = f"{rating:.1f}" if rating is not None else ""
         payload = {
             "eyebrow": "Updated",
-            "title": f"{stars}★ locked in" if stars else "Rating updated",
-            "body": f"{name} — your taste map just got clearer.",
+            "title": f"{stars}★ saved" if stars else "Rating updated",
+            "body": f"{name} is on your list.",
         }
     else:
         score = float(rating or 0)
         if score >= 4.5:
             payload = {
                 "eyebrow": "A favorite",
-                "title": f"{score:.1f}★ — yes",
-                "body": f"{name} joins your shortlist.",
+                "title": f"{score:.1f}★",
+                "body": f"{name} is one of your highs.",
             }
         elif score >= 3.0:
             payload = {
@@ -1147,7 +1148,7 @@ def queue_action_feedback(
             payload = {
                 "eyebrow": "Honest take",
                 "title": f"{score:.1f}★ logged",
-                "body": f"{name} — noted, and we’ll steer around it.",
+                "body": f"We’ll weigh {name} accordingly.",
             }
     st.session_state[FEEDBACK_KEY] = payload
 
@@ -1176,8 +1177,8 @@ def render_profile_welcome() -> bool:
         f'<div class="apres-welcome-eyebrow">Welcome</div>'
         f'<div class="apres-welcome-title">You’re in, {escape(name)}.</div>'
         f'<p class="apres-welcome-body">'
-        "Discover is ready — rate what you’ve tried, skip what you haven’t, "
-        "and we’ll start shaping dates around your taste."
+        "Discover is ready. Rate what you’ve tried, skip what you haven’t, "
+        "and we’ll shape dates around your taste."
         "</p>"
         f"</div>",
         unsafe_allow_html=True,
@@ -1213,7 +1214,7 @@ def show_data_error(exc: Exception) -> None:
             [DEFAULT_BOROUGH],
         )[0]
         venue_count = count_row.get("VENUE_COUNT") or count_row.get("venue_count")
-        st.success(f"Live probe: **{venue_count}** venues — access works. Click **Retry**.")
+        st.success(f"Live probe: **{venue_count}** venues. Access works. Click **Retry**.")
     except Exception as probe_exc:
         st.markdown(f"**Live probe:** `{probe_exc}`")
 
@@ -1253,7 +1254,7 @@ def render_apres_header(subtitle: str = "Manhattan Beach", photo_uri: str | None
         """
         <div class="apres-status">
             <span>Apr&egrave;s</span>
-            <span class="tagline">Find what comes next.</span>
+            <span class="tagline">Your evening, sorted.</span>
             <span>&middot;</span>
         </div>
         """,
@@ -1291,11 +1292,11 @@ def render_progress(stats: dict[str, int], *, borough: str | None = None) -> Non
     nudge_html = ""
     if remaining == 0 and borough:
         nudge_html = (
-            f'<div class="progress-nudge">You cleared {escape(borough)} — nice.</div>'
+            f'<div class="progress-nudge">You cleared {escape(borough)}.</div>'
         )
     elif 0 < remaining <= 3:
         nudge_html = (
-            '<div class="progress-nudge">Almost there — a few spots left.</div>'
+            '<div class="progress-nudge">Almost there. A few spots left.</div>'
         )
 
     st.markdown(
@@ -1759,7 +1760,7 @@ def render_planned_dates_list(email: str) -> None:
             empty_state_html(
                 eyebrow="Your calendar",
                 title="No dates planned yet",
-                body="Build one above — we’ll keep it here when you’re ready to go.",
+                body="Build one above. We’ll keep it here when you’re ready.",
             ),
             unsafe_allow_html=True,
         )
@@ -1934,7 +1935,7 @@ def render_plan_date(email: str) -> None:
 
     st.markdown('<div class="section-label">Plan a date</div>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="swipe-hint">Build a two-stop evening — re-roll, swap stops, then save with a date & time.</p>',
+        '<p class="swipe-hint">Build a two-stop evening. Re-roll, swap stops, then save a time.</p>',
         unsafe_allow_html=True,
     )
 
@@ -2055,17 +2056,32 @@ def render_plan_date(email: str) -> None:
 
 
 def render_login() -> None:
-    render_apres_header("Create your account.")
-    st.markdown(
-        '<p class="apres-sub">email only · no password · under a minute</p>',
-        unsafe_allow_html=True,
-    )
+    from onboarding import LOGIN_MODE_KEY
+
+    returning = st.session_state.get(LOGIN_MODE_KEY) == "returning"
+    if returning:
+        render_apres_header("Welcome back.")
+        st.markdown(
+            '<p class="apres-sub">email only · no password</p>',
+            unsafe_allow_html=True,
+        )
+        panel_title = "Sign in with your email"
+        panel_body = "Same email as before. We’ll pick up your ratings and profile."
+    else:
+        render_apres_header("Create your account.")
+        st.markdown(
+            '<p class="apres-sub">email only · no password</p>',
+            unsafe_allow_html=True,
+        )
+        panel_title = "Start with your email"
+        panel_body = "A few taste questions come next, so Discover and dates fit you sooner."
+
     st.markdown(
         '<div class="empty-state">'
-        '<div class="empty-state-eyebrow">Registration</div>'
-        '<div class="empty-state-title">Start with your email</div>'
+        f'<div class="empty-state-eyebrow">{"Sign in" if returning else "Registration"}</div>'
+        f'<div class="empty-state-title">{panel_title}</div>'
         '<div class="empty-state-mark"></div>'
-        "<p>We’ll ask a few taste questions next — so Discover and dates fit you from the first night.</p>"
+        f"<p>{panel_body}</p>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -2089,6 +2105,12 @@ def render_login() -> None:
             return
         st.session_state["user_email"] = email
         clear_discover_venue()
+        try:
+            from onboarding import remember_device_after_login
+
+            remember_device_after_login()
+        except Exception:
+            pass
         log_event("login_ok", "Email accepted; entering app", email=email)
         st.rerun()
 
@@ -2244,7 +2266,7 @@ def render_discover(email: str) -> None:
             )
             bump_session_counter("skipped")
             queue_action_feedback(kind="skipped", place_name=place_name)
-            st.toast("Skipped — find it again under Skipped.")
+            st.toast("Skipped. Find it again under Skipped.")
             st.rerun()
 
     with col_rate:
@@ -2497,6 +2519,7 @@ def main() -> None:
         return
 
     first = (profile or {}).get("FIRST_NAME") or ""
+    city = (profile or {}).get("CITY") or ""
     display_name = first or email.split("@")[0].replace(".", " ").title()
     photo_uri = None
     try:
@@ -2510,7 +2533,7 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         log_event("fetch_photo", "Avatar load failed", level="warning", email=email, exc=exc)
 
-    render_apres_header(f"Good evening, {display_name}.", photo_uri=photo_uri)
+    render_apres_header(personalized_greeting(display_name, city), photo_uri=photo_uri)
     st.markdown(
         f'<p class="apres-sub">signed in as {email}</p>',
         unsafe_allow_html=True,
