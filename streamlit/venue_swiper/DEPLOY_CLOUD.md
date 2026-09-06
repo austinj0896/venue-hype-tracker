@@ -57,7 +57,20 @@ Save. The app reboots automatically.
 Send friends the `https://YOUR-APP-NAME.streamlit.app` URL.
 They enter an email inside the app — no Snowflake login.
 
-## 5. Local test (optional)
+## 5. Partner invite email (optional, future)
+
+Partner linking works in-app today. Outbound email for users who don’t have an account yet is scaffolded only (invite row + signup URL logged). When you’re ready to send mail, add something like:
+
+```toml
+[app]
+public_app_url = "https://YOUR-APP-NAME.streamlit.app"
+# mail_provider = "resend"   # future
+# resend_api_key = "..."     # future
+```
+
+Until then, share the app URL manually with invitees.
+
+## 6. Local test (optional)
 
 ```bat
 copy streamlit\venue_swiper\.streamlit\secrets.toml.example streamlit\venue_swiper\.streamlit\secrets.toml

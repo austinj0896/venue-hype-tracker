@@ -12,14 +12,33 @@ from profile_options import (
     ACTIVITY_OPTIONS,
     DEFAULT_CITIES,
     DIETARY_OPTIONS,
+    OPEN_TO_DATES_LABELS,
+    RELATIONSHIP_STATUS_KEYS,
+    RELATIONSHIP_STATUS_LABELS,
+    RELATIONSHIP_STATUS_PARTNERED,
+    RELATIONSHIP_STATUS_SOLO,
+    compute_profile_visibility,
     neighbourhoods_for_city,
+    relationship_preview_line,
+)
+from partner_store import (
+    can_view_profile,
+    cancel_partner_request,
+    create_partner_request,
+    get_linked_partner,
+    list_notifications,
+    list_pending_inbound,
+    list_pending_outbound,
+    mark_notifications_read,
+    respond_to_partner_request,
+    unlink_partner,
 )
 from user_profiles_store import (
     MAX_PROFILE_PHOTOS,
     clear_profile_cache,
+    fetch_profile,
     is_profile_complete,
     list_profile_photos,
-    photo_bytes,
     photo_data_uri,
     prepare_profile_photo,
     save_profile_photos,
@@ -30,6 +49,7 @@ DRAFT_KEY = "profile_draft"
 STEP_KEY = "profile_setup_step"
 PREVIEW_OPEN_KEY = "apres_profile_preview_open"
 PREVIEW_IDX_KEY = "apres_preview_photo_idx"
+PARTNER_PREVIEW_KEY = "apres_partner_preview_open"
 PROFILE_FLASH_KEY = "apres_profile_flash"
 
 
@@ -52,6 +72,9 @@ def _empty_draft(email: str, existing: dict[str, Any] | None = None) -> dict[str
             "activity_preferences": activities,
             "accepted_terms": bool(existing.get("ACCEPTED_TERMS_AT")),
             "marketing_opt_in": bool(existing.get("MARKETING_OPT_IN")),
+            "relationship_status": existing.get("RELATIONSHIP_STATUS") or "",
+            "open_to_dates": existing.get("OPEN_TO_DATES"),
+            "partner_email_draft": "",
             "photos": [],
             "photos_changed": False,
             "photos_loaded": False,
@@ -68,6 +91,9 @@ def _empty_draft(email: str, existing: dict[str, Any] | None = None) -> dict[str
         "activity_preferences": [],
         "accepted_terms": False,
         "marketing_opt_in": False,
+        "relationship_status": "",
+        "open_to_dates": None,
+        "partner_email_draft": "",
         "photos": [],
         "photos_changed": False,
         "photos_loaded": False,
@@ -79,6 +105,14 @@ def _get_draft(email: str, existing: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(draft, dict) or draft.get("email") != email:
         draft = _empty_draft(email, existing)
         st.session_state[DRAFT_KEY] = draft
+    # Backfill keys for drafts created before relationship fields existed.
+    for key, default in (
+        ("relationship_status", ""),
+        ("open_to_dates", None),
+        ("partner_email_draft", ""),
+    ):
+        if key not in draft:
+            draft[key] = default
     return draft
 
 
@@ -302,6 +336,7 @@ def _chips_html(items: list[str]) -> str:
 
 def _dismiss_profile_preview() -> None:
     st.session_state[PREVIEW_OPEN_KEY] = False
+    st.session_state[PARTNER_PREVIEW_KEY] = False
 
 
 @st.dialog("Preview", width="small", on_dismiss=_dismiss_profile_preview)
@@ -314,6 +349,8 @@ def _open_profile_preview_dialog(
     activities: list[str],
     photos: list[dict[str, Any]],
     date_of_birth: Any = None,
+    relationship_status: str | None = None,
+    open_to_dates: bool | None = None,
 ) -> None:
     """Modal profile preview — dismiss via X, Escape, or click outside."""
     render_profile_preview_card(
@@ -324,6 +361,8 @@ def _open_profile_preview_dialog(
         activities=activities,
         photos=photos,
         date_of_birth=date_of_birth,
+        relationship_status=relationship_status,
+        open_to_dates=open_to_dates,
     )
 
 
@@ -336,6 +375,8 @@ def render_profile_preview_card(
     activities: list[str],
     photos: list[dict[str, Any]],
     date_of_birth: Any = None,
+    relationship_status: str | None = None,
+    open_to_dates: bool | None = None,
 ) -> None:
     """Phone-sized dating card; tap left/right on the photo to flip in-place."""
     import json
@@ -358,6 +399,10 @@ def render_profile_preview_card(
 
     place_bits = [b for b in [(neighbourhood or "").strip(), (city or "").strip()] if b]
     place = escape(" · ".join(place_bits)) if place_bits else "Somewhere great"
+    status_line = escape(relationship_preview_line(relationship_status, open_to_dates))
+    status_html = (
+        f'<div class="status">{status_line}</div>' if status_line else ""
+    )
 
     diet_items = [d for d in dietary if d and d != "None"]
     diet_html = _chips_html(diet_items) or (
@@ -535,6 +580,11 @@ def render_profile_preview_card(
   .place {{
     font-size: 13px;
     color: rgba(248,230,210,0.72);
+    margin: 0 0 0.35rem;
+  }}
+  .status {{
+    font-size: 12px;
+    color: rgba(211,163,69,0.95);
     margin: 0 0 0.7rem;
   }}
   .label {{
@@ -567,6 +617,7 @@ def render_profile_preview_card(
   <div class="body">
     <div class="name">{title}</div>
     <div class="place">{place}</div>
+    {status_html}
     <div class="label">Into</div>
     <div class="chips">{act_html}</div>
     <div class="label">Dietary</div>
@@ -580,9 +631,9 @@ def render_profile_preview_card(
     )
 
 
-def _progress_html(step: int, total: int = 4) -> str:
+def _progress_html(step: int, total: int = 5) -> str:
     parts: list[str] = []
-    labels = ["About you", "Where", "Dietary", "Activities"]
+    labels = ["About you", "Where", "Dietary", "Activities", "Connection"]
     for i in range(1, total + 1):
         cls = "profile-step done" if i < step else ("profile-step active" if i == step else "profile-step")
         parts.append(
@@ -891,8 +942,21 @@ def render_profile_setup(email: str, existing: dict[str, Any] | None = None) -> 
     st.markdown(f"<style>{profile_setup_css()}</style>", unsafe_allow_html=True)
 
     draft = _get_draft(email, existing)
+    if STEP_KEY not in st.session_state and existing:
+        # Returning users who only need Connection land on step 5.
+        core_ok = bool(
+            (existing.get("FIRST_NAME") or "").strip()
+            and (existing.get("LAST_NAME") or "").strip()
+            and (existing.get("CITY") or "").strip()
+            and (existing.get("NEIGHBOURHOOD") or "").strip()
+            and (existing.get("DIETARY_NEEDS") or [])
+            and (existing.get("ACTIVITY_PREFERENCES") or [])
+            and existing.get("ACCEPTED_TERMS_AT")
+        )
+        if core_ok and not (existing.get("RELATIONSHIP_STATUS") or "").strip():
+            st.session_state[STEP_KEY] = 5
     step = int(st.session_state.get(STEP_KEY, 1))
-    step = max(1, min(4, step))
+    step = max(1, min(5, step))
 
     st.markdown(
         '<div class="section-label">Welcome to Après</div>',
@@ -915,8 +979,10 @@ def render_profile_setup(email: str, existing: dict[str, Any] | None = None) -> 
         _render_step_location(draft)
     elif step == 3:
         _render_step_dietary(draft)
+    elif step == 4:
+        _render_step_activities(draft)
     else:
-        _render_step_activities(draft, email)
+        _render_step_connection(draft, email)
 
 
 def _nav(back: bool = True, next_label: str = "Continue", next_key: str = "profile_next") -> tuple[bool, bool]:
@@ -1066,7 +1132,7 @@ def _render_step_dietary(draft: dict[str, Any]) -> None:
         st.rerun()
 
 
-def _render_step_activities(draft: dict[str, Any], email: str) -> None:
+def _render_step_activities(draft: dict[str, Any]) -> None:
     st.markdown('<div class="section-label">Activity profile</div>', unsafe_allow_html=True)
     st.caption("Which of these genuinely appeal to you? Pick at least one.")
     selected = st.multiselect(
@@ -1076,7 +1142,7 @@ def _render_step_activities(draft: dict[str, Any], email: str) -> None:
         key="pf_activities",
     )
 
-    back, nxt = _nav(next_label="Finish & start exploring", next_key="profile_step4")
+    back, nxt = _nav(next_label="Continue", next_key="profile_step4")
     if back:
         draft["activity_preferences"] = list(selected)
         _save_draft(draft)
@@ -1088,6 +1154,88 @@ def _render_step_activities(draft: dict[str, Any], email: str) -> None:
             return
         draft["activity_preferences"] = list(selected)
         _save_draft(draft)
+        st.session_state[STEP_KEY] = 5
+        st.rerun()
+
+
+def _render_connection_controls(
+    draft: dict[str, Any],
+    *,
+    key_prefix: str,
+) -> tuple[str, bool | None, str]:
+    """Shared relationship UI. Returns (status_key, open_to_dates, partner_email)."""
+    status_keys = list(RELATIONSHIP_STATUS_KEYS)
+    labels = [RELATIONSHIP_STATUS_LABELS[k] for k in status_keys]
+    current = (draft.get("relationship_status") or "").strip()
+    index = status_keys.index(current) if current in status_keys else 0
+    picked_label = st.radio(
+        "Where are you at?",
+        labels,
+        index=index,
+        key=f"{key_prefix}_rel_status",
+    )
+    status = status_keys[labels.index(picked_label)]
+
+    open_to: bool | None = None
+    partner_email = ""
+    if status in RELATIONSHIP_STATUS_SOLO:
+        open_labels = [OPEN_TO_DATES_LABELS[True], OPEN_TO_DATES_LABELS[False]]
+        prior = draft.get("open_to_dates")
+        open_index = 0 if prior is True else (1 if prior is False else 0)
+        open_pick = st.radio(
+            "Open to dates?",
+            open_labels,
+            index=open_index,
+            key=f"{key_prefix}_open_dates",
+            help="Open to dates makes your profile public for future discovery. "
+            "Not right now keeps it private.",
+        )
+        open_to = open_pick == OPEN_TO_DATES_LABELS[True]
+        vis = compute_profile_visibility(status, open_to)
+        st.caption(
+            "Your profile will be public."
+            if vis == "public"
+            else "Your profile stays private."
+        )
+    else:
+        st.caption("Coupled profiles stay private — only a linked partner can see yours.")
+        partner_email = st.text_input(
+            "Partner email (optional)",
+            value=str(draft.get("partner_email_draft") or ""),
+            key=f"{key_prefix}_partner_email",
+            placeholder="their@email.com",
+            help="We’ll send them an in-app request if they already have Après. "
+            "Email invites for new accounts come later.",
+        ).strip()
+        open_to = False
+
+    return status, open_to, partner_email
+
+
+def _render_step_connection(draft: dict[str, Any], email: str) -> None:
+    st.markdown('<div class="section-label">Connection</div>', unsafe_allow_html=True)
+    st.caption("How you show up — and who you’re with.")
+    status, open_to, partner_email = _render_connection_controls(draft, key_prefix="pf")
+
+    back, nxt = _nav(next_label="Finish & start exploring", next_key="profile_step5")
+    if back:
+        draft["relationship_status"] = status
+        draft["open_to_dates"] = open_to
+        draft["partner_email_draft"] = partner_email
+        _save_draft(draft)
+        st.session_state[STEP_KEY] = 4
+        st.rerun()
+    if nxt:
+        if status not in RELATIONSHIP_STATUS_KEYS:
+            st.error("Choose a relationship status.")
+            return
+        if status in RELATIONSHIP_STATUS_SOLO and open_to is None:
+            st.error("Say whether you’re open to dates.")
+            return
+        draft["relationship_status"] = status
+        draft["open_to_dates"] = open_to
+        draft["partner_email_draft"] = partner_email
+        _save_draft(draft)
         _persist_complete(email, draft)
 
 
@@ -1096,6 +1244,8 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
     if not draft.get("accepted_terms"):
         st.error("Terms must be accepted.")
         return
+    status = str(draft.get("relationship_status") or "").strip()
+    open_to = draft.get("open_to_dates")
     try:
         upsert_profile(
             email=email,
@@ -1111,10 +1261,29 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
             if isinstance(draft.get("date_of_birth"), date)
             else None,
             phone=str(draft.get("phone") or "") or None,
+            relationship_status=status or None,
+            open_to_dates=open_to if isinstance(open_to, bool) else None,
             photos=list(draft.get("photos") or []),
             update_photos=True,
             mark_complete=True,
         )
+        partner_email = str(draft.get("partner_email_draft") or "").strip()
+        if status in RELATIONSHIP_STATUS_PARTNERED and partner_email:
+            try:
+                result = create_partner_request(email, partner_email)
+                if result.get("RECIPIENT_HAS_ACCOUNT"):
+                    st.session_state[PROFILE_FLASH_KEY] = (
+                        f"Partner request sent to {partner_email}."
+                    )
+                else:
+                    st.session_state[PROFILE_FLASH_KEY] = (
+                        f"Invite saved for {partner_email}. "
+                        "Email delivery comes later — share Après with them for now."
+                    )
+            except Exception as invite_exc:  # noqa: BLE001
+                st.session_state[PROFILE_FLASH_KEY] = (
+                    f"Profile saved, but partner invite failed: {invite_exc}"
+                )
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not save your profile: {exc}")
         return
@@ -1183,6 +1352,23 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         dob_live = draft.get("date_of_birth") or profile.get("DATE_OF_BIRTH")
         if st.session_state.get("edit_add_dob") and st.session_state.get("edit_dob"):
             dob_live = st.session_state.get("edit_dob")
+        status_live = str(
+            st.session_state.get("edit_rel_status_key")
+            or draft.get("relationship_status")
+            or profile.get("RELATIONSHIP_STATUS")
+            or ""
+        )
+        # Radio stores label; map back if needed
+        if status_live not in RELATIONSHIP_STATUS_KEYS:
+            rev = {v: k for k, v in RELATIONSHIP_STATUS_LABELS.items()}
+            status_live = rev.get(status_live, status_live)
+        open_live = draft.get("open_to_dates")
+        if "edit_open_dates" in st.session_state:
+            open_pick = st.session_state.get("edit_open_dates")
+            if open_pick == OPEN_TO_DATES_LABELS[True]:
+                open_live = True
+            elif open_pick == OPEN_TO_DATES_LABELS[False]:
+                open_live = False
 
         _open_profile_preview_dialog(
             first_name=first_live,
@@ -1192,7 +1378,12 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
             activities=activities_live,
             photos=list(draft.get("photos") or []),
             date_of_birth=dob_live,
+            relationship_status=status_live or None,
+            open_to_dates=open_live if isinstance(open_live, bool) else None,
         )
+
+    _render_partner_inbox(email)
+    _render_connection_settings(email, draft, profile)
 
     st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
     st.markdown(
@@ -1281,6 +1472,30 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         if not activities:
             st.error("Select at least one activity.")
             return
+        status = str(draft.get("relationship_status") or profile.get("RELATIONSHIP_STATUS") or "").strip()
+        open_to = draft.get("open_to_dates")
+        if "edit_rel_status" in st.session_state:
+            # Values written by _render_connection_settings into draft on interaction;
+            # re-read from draft which Connection section updates before save via widgets.
+            pass
+        # Prefer live Connection widgets if present this run
+        status_label = st.session_state.get("edit_rel_status")
+        if status_label in RELATIONSHIP_STATUS_LABELS.values():
+            status = {v: k for k, v in RELATIONSHIP_STATUS_LABELS.items()}[status_label]
+        open_pick = st.session_state.get("edit_open_dates")
+        if status in RELATIONSHIP_STATUS_SOLO:
+            if open_pick == OPEN_TO_DATES_LABELS[True]:
+                open_to = True
+            elif open_pick == OPEN_TO_DATES_LABELS[False]:
+                open_to = False
+        elif status in RELATIONSHIP_STATUS_PARTNERED:
+            open_to = False
+        if status not in RELATIONSHIP_STATUS_KEYS:
+            st.error("Choose a relationship status in Connection.")
+            return
+        if status in RELATIONSHIP_STATUS_SOLO and open_to is None:
+            st.error("Say whether you’re open to dates.")
+            return
         try:
             with st.spinner("Saving…"):
                 saved = upsert_profile(
@@ -1295,6 +1510,8 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
                     marketing_opt_in=bool(marketing),
                     date_of_birth=dob if isinstance(dob, date) else None,
                     phone=phone.strip() or None,
+                    relationship_status=status,
+                    open_to_dates=open_to if isinstance(open_to, bool) else None,
                     photos=list(draft.get("photos") or []),
                     update_photos=bool(draft.get("photos_changed")),
                     mark_complete=True,
@@ -1307,9 +1524,139 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         if not is_profile_complete(saved):
             st.error("Profile is still incomplete. Check required fields.")
             return
+        partner_email = str(st.session_state.get("edit_partner_email") or "").strip()
+        if status in RELATIONSHIP_STATUS_PARTNERED and partner_email and not get_linked_partner(email):
+            try:
+                result = create_partner_request(email, partner_email)
+                if result.get("ALREADY_PENDING"):
+                    flash_extra = f" · partner request already pending for {partner_email}"
+                elif result.get("RECIPIENT_HAS_ACCOUNT"):
+                    flash_extra = f" · partner request sent to {partner_email}"
+                else:
+                    flash_extra = (
+                        f" · invite saved for {partner_email} "
+                        "(email delivery later)"
+                    )
+            except Exception as invite_exc:  # noqa: BLE001
+                flash_extra = f" · partner invite failed: {invite_exc}"
+        else:
+            flash_extra = ""
         st.session_state.pop(DRAFT_KEY, None)
         clear_profile_cache()
         st.session_state[PROFILE_FLASH_KEY] = (
-            f"Saved · {saved.get('CITY')} · {saved.get('NEIGHBOURHOOD')}"
+            f"Saved · {saved.get('CITY')} · {saved.get('NEIGHBOURHOOD')}{flash_extra}"
         )
         st.rerun()
+
+
+def _render_partner_inbox(email: str) -> None:
+    inbound = list_pending_inbound(email)
+    notifs = list_notifications(email, limit=20)
+    if not inbound and not notifs:
+        return
+    st.markdown('<div class="section-label">Inbox</div>', unsafe_allow_html=True)
+    unread = [n for n in notifs if not n.get("READ_AT")]
+    if unread:
+        st.caption(f"{len(unread)} unread notification{'s' if len(unread) != 1 else ''}.")
+        if st.button("Mark all read", key="notif_mark_all"):
+            mark_notifications_read(email)
+            st.rerun()
+
+    for req in inbound:
+        from_email = str(req.get("FROM_EMAIL") or "")
+        rid = str(req.get("REQUEST_ID") or "")
+        st.info(f"Partner request from **{from_email}**")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Accept", key=f"accept_{rid}", use_container_width=True, type="primary"):
+                try:
+                    respond_to_partner_request(email, rid, accept=True)
+                    mark_notifications_read(email)
+                    st.session_state[PROFILE_FLASH_KEY] = f"You’re linked with {from_email}."
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(str(exc))
+        with c2:
+            if st.button("Decline", key=f"decline_{rid}", use_container_width=True):
+                try:
+                    respond_to_partner_request(email, rid, accept=False)
+                    mark_notifications_read(email)
+                    st.session_state[PROFILE_FLASH_KEY] = "Partner request declined."
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(str(exc))
+
+    for n in notifs[:8]:
+        kind = str(n.get("KIND") or "")
+        payload = n.get("PAYLOAD") or {}
+        if kind == "partner_accepted":
+            st.caption(f"Accepted — linked with {payload.get('to_email') or payload.get('from_email')}")
+        elif kind == "partner_declined":
+            st.caption(f"Declined — {payload.get('to_email') or 'partner'} said not now.")
+        elif kind == "partner_request" and not inbound:
+            st.caption(f"Request from {payload.get('from_email')}")
+
+
+def _render_connection_settings(
+    email: str,
+    draft: dict[str, Any],
+    profile: dict[str, Any],
+) -> None:
+    st.markdown('<div class="section-label">Connection</div>', unsafe_allow_html=True)
+    status, open_to, partner_email = _render_connection_controls(draft, key_prefix="edit")
+    draft["relationship_status"] = status
+    draft["open_to_dates"] = open_to
+    draft["partner_email_draft"] = partner_email
+    _save_draft(draft)
+
+    partner = get_linked_partner(email)
+    if partner:
+        st.success(f"Linked with **{partner}**")
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("View partner profile", use_container_width=True, key="view_partner"):
+                st.session_state[PARTNER_PREVIEW_KEY] = True
+                st.session_state[PREVIEW_IDX_KEY] = 0
+                st.rerun()
+        with b2:
+            if st.button("Unlink partner", use_container_width=True, key="unlink_partner"):
+                unlink_partner(email)
+                st.session_state[PROFILE_FLASH_KEY] = "Partner unlinked."
+                st.rerun()
+
+    if st.session_state.get(PARTNER_PREVIEW_KEY) and partner:
+        if can_view_profile(email, partner):
+            other = fetch_profile(partner, include_photo=False) or {}
+            photos = list_profile_photos(partner, include_bytes=True)
+            _open_profile_preview_dialog(
+                first_name=str(other.get("FIRST_NAME") or "Partner"),
+                city=str(other.get("CITY") or ""),
+                neighbourhood=str(other.get("NEIGHBOURHOOD") or ""),
+                dietary=list(other.get("DIETARY_NEEDS") or []),
+                activities=list(other.get("ACTIVITY_PREFERENCES") or []),
+                photos=[
+                    {
+                        "PHOTO_ID": p.get("PHOTO_ID"),
+                        "PHOTO_B64": p.get("PHOTO_B64"),
+                        "PHOTO_MIME": p.get("PHOTO_MIME"),
+                    }
+                    for p in photos
+                    if p.get("PHOTO_B64")
+                ],
+                date_of_birth=other.get("DATE_OF_BIRTH"),
+                relationship_status=other.get("RELATIONSHIP_STATUS"),
+                open_to_dates=other.get("OPEN_TO_DATES"),
+            )
+        else:
+            st.warning("You can’t view that profile.")
+            st.session_state[PARTNER_PREVIEW_KEY] = False
+
+    outbound = list_pending_outbound(email)
+    for req in outbound:
+        to_email = str(req.get("TO_EMAIL") or "")
+        rid = str(req.get("REQUEST_ID") or "")
+        st.caption(f"Pending invite → {to_email}")
+        if st.button("Cancel request", key=f"cancel_{rid}"):
+            cancel_partner_request(email, rid)
+            st.session_state[PROFILE_FLASH_KEY] = "Partner request cancelled."
+            st.rerun()

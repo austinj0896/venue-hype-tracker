@@ -54,6 +54,7 @@ from onboarding import onboarding_complete, render_onboarding
 from places_data import fetch_community_ratings, fetch_venues_with_coords
 from profile_options import preferred_types_from_activities
 from profile_setup import render_profile_settings, render_profile_setup
+from partner_store import count_unread_notifications
 from user_profiles_store import (
     fetch_profile,
     fetch_profile_photo,
@@ -2673,8 +2674,15 @@ def main() -> None:
     if render_profile_welcome():
         return
 
+    unread = 0
+    try:
+        unread = count_unread_notifications(email)
+    except Exception:
+        unread = 0
+    profile_label = f"Profile ({unread})" if unread else "Profile"
+
     tab_discover, tab_plan, tab_rated, tab_skipped, tab_profile = st.tabs(
-        ["Discover", "Plan", "Rated", "Skipped", "Profile"]
+        ["Discover", "Plan", "Rated", "Skipped", profile_label]
     )
 
     with tab_discover:

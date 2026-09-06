@@ -15,6 +15,9 @@ DEFAULT_POSTGRES_PROFILES = "user_profiles"
 DEFAULT_POSTGRES_PROFILE_PHOTOS = "user_profile_photos"
 DEFAULT_POSTGRES_MEDIA_PHOTOS = "media_photos"
 DEFAULT_POSTGRES_PHOTO_LINKS = "user_profile_photo_links"
+DEFAULT_POSTGRES_PARTNER_REQUESTS = "partner_link_requests"
+DEFAULT_POSTGRES_PARTNER_LINKS = "partner_links"
+DEFAULT_POSTGRES_NOTIFICATIONS = "user_notifications"
 DEFAULT_SF_DIM = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"
 DEFAULT_SF_RATINGS = "VENUE_HYPE.APP.VENUE_RATINGS"
 DEFAULT_SF_TAGS = "VENUE_HYPE.APP.VENUE_TAGS"
@@ -23,6 +26,9 @@ DEFAULT_SF_PROFILES = "VENUE_HYPE.APP.USER_PROFILES"
 DEFAULT_SF_PROFILE_PHOTOS = "VENUE_HYPE.APP.USER_PROFILE_PHOTOS"
 DEFAULT_SF_MEDIA_PHOTOS = "VENUE_HYPE.APP.MEDIA_PHOTOS"
 DEFAULT_SF_PHOTO_LINKS = "VENUE_HYPE.APP.USER_PROFILE_PHOTO_LINKS"
+DEFAULT_SF_PARTNER_REQUESTS = "VENUE_HYPE.APP.PARTNER_LINK_REQUESTS"
+DEFAULT_SF_PARTNER_LINKS = "VENUE_HYPE.APP.PARTNER_LINKS"
+DEFAULT_SF_NOTIFICATIONS = "VENUE_HYPE.APP.USER_NOTIFICATIONS"
 
 
 def backend() -> str:
@@ -185,6 +191,60 @@ def user_profile_photo_links_table() -> str:
         )
     except Exception:
         return DEFAULT_SF_PHOTO_LINKS
+
+
+def partner_link_requests_table() -> str:
+    if backend() == "postgres":
+        try:
+            return str(
+                st.secrets.get("app", {}).get(
+                    "partner_link_requests_table", DEFAULT_POSTGRES_PARTNER_REQUESTS
+                )
+            )
+        except Exception:
+            return DEFAULT_POSTGRES_PARTNER_REQUESTS
+    try:
+        return str(
+            st.secrets.get("app", {}).get(
+                "partner_link_requests_table", DEFAULT_SF_PARTNER_REQUESTS
+            )
+        )
+    except Exception:
+        return DEFAULT_SF_PARTNER_REQUESTS
+
+
+def partner_links_table() -> str:
+    if backend() == "postgres":
+        try:
+            return str(
+                st.secrets.get("app", {}).get(
+                    "partner_links_table", DEFAULT_POSTGRES_PARTNER_LINKS
+                )
+            )
+        except Exception:
+            return DEFAULT_POSTGRES_PARTNER_LINKS
+    try:
+        return str(st.secrets.get("app", {}).get("partner_links_table", DEFAULT_SF_PARTNER_LINKS))
+    except Exception:
+        return DEFAULT_SF_PARTNER_LINKS
+
+
+def user_notifications_table() -> str:
+    if backend() == "postgres":
+        try:
+            return str(
+                st.secrets.get("app", {}).get(
+                    "user_notifications_table", DEFAULT_POSTGRES_NOTIFICATIONS
+                )
+            )
+        except Exception:
+            return DEFAULT_POSTGRES_NOTIFICATIONS
+    try:
+        return str(
+            st.secrets.get("app", {}).get("user_notifications_table", DEFAULT_SF_NOTIFICATIONS)
+        )
+    except Exception:
+        return DEFAULT_SF_NOTIFICATIONS
 
 
 def _to_upper_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

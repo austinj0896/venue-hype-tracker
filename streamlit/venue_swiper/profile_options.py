@@ -301,6 +301,60 @@ ACTIVITY_OPTIONS = [
     "Experiences / tasting menus",
 ]
 
+# Relationship / connection (Après-flavored keys + labels).
+RELATIONSHIP_STATUS_SOLO = frozenset({"flying_solo", "complicated"})
+RELATIONSHIP_STATUS_PARTNERED = frozenset({"seeing_someone", "coupled_up"})
+RELATIONSHIP_STATUS_KEYS = (
+    "flying_solo",
+    "complicated",
+    "seeing_someone",
+    "coupled_up",
+)
+RELATIONSHIP_STATUS_LABELS: dict[str, str] = {
+    "flying_solo": "Flying solo",
+    "complicated": "It's complicated",
+    "seeing_someone": "Seeing someone",
+    "coupled_up": "Coupled up",
+}
+OPEN_TO_DATES_LABELS: dict[bool, str] = {
+    True: "Open to dates",
+    False: "Not right now",
+}
+
+
+def relationship_status_label(status: str | None) -> str:
+    key = (status or "").strip()
+    return RELATIONSHIP_STATUS_LABELS.get(key, "")
+
+
+def relationship_preview_line(
+    status: str | None,
+    open_to_dates: bool | None = None,
+) -> str:
+    """Short line for the dating-style preview card."""
+    label = relationship_status_label(status)
+    if not label:
+        return ""
+    key = (status or "").strip()
+    if key in RELATIONSHIP_STATUS_SOLO and open_to_dates is True:
+        return f"{label} · Open to dates"
+    if key in RELATIONSHIP_STATUS_SOLO and open_to_dates is False:
+        return f"{label} · Not right now"
+    return label
+
+
+def compute_profile_visibility(
+    status: str | None,
+    open_to_dates: bool | None,
+) -> str:
+    """public only when solo/complicated and explicitly open to dates."""
+    key = (status or "").strip()
+    if key in RELATIONSHIP_STATUS_PARTNERED:
+        return "private"
+    if key in RELATIONSHIP_STATUS_SOLO and open_to_dates is True:
+        return "public"
+    return "private"
+
 # Soft Discover bias: profile activities → Google Places primary_type values.
 ACTIVITY_TO_PRIMARY_TYPES: dict[str, tuple[str, ...]] = {
     "Dining": (

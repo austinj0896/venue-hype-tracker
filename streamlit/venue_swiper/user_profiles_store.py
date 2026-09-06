@@ -19,6 +19,12 @@ from db import (
     user_profile_photos_table,
     user_profiles_table,
 )
+from profile_options import (
+    RELATIONSHIP_STATUS_KEYS,
+    RELATIONSHIP_STATUS_PARTNERED,
+    RELATIONSHIP_STATUS_SOLO,
+    compute_profile_visibility,
+)
 
 _SCHEMA_APPLIED_KEY = "_user_profiles_schema_ok"
 _PHOTOS_SCHEMA_KEY = "_user_profile_photos_schema_ok"
@@ -64,6 +70,12 @@ def ensure_schema() -> None:
         for col_sql in (
             f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_b64 TEXT",
             f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_mime TEXT",
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS relationship_status TEXT",
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS open_to_dates BOOLEAN",
+            (
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_visibility "
+                f"TEXT NOT NULL DEFAULT 'private'"
+            ),
         ):
             try:
                 execute_write(col_sql, [])
@@ -81,6 +93,12 @@ def ensure_schema() -> None:
         except Exception:
             pass
         st.session_state[_SCHEMA_APPLIED_KEY] = True
+        try:
+            from partner_store import ensure_relationship_schema
+
+            ensure_relationship_schema()
+        except Exception:
+            pass
     except Exception:
         raise
 
@@ -244,6 +262,16 @@ def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
     has_photo = row.get("HAS_PROFILE_PHOTO")
     if has_photo is None:
         has_photo = bool(row.get("PROFILE_PHOTO_B64"))
+    status = (row.get("RELATIONSHIP_STATUS") or "").strip() or None
+    open_raw = row.get("OPEN_TO_DATES")
+    open_to_dates: bool | None
+    if open_raw is None:
+        open_to_dates = None
+    else:
+        open_to_dates = bool(open_raw)
+    visibility = (row.get("PROFILE_VISIBILITY") or "").strip() or None
+    if not visibility:
+        visibility = compute_profile_visibility(status, open_to_dates)
     return {
         "USER_EMAIL": row.get("USER_EMAIL"),
         "FIRST_NAME": (row.get("FIRST_NAME") or "").strip(),
@@ -261,6 +289,9 @@ def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "PROFILE_PHOTO_MIME": (row.get("PROFILE_PHOTO_MIME") or "").strip() or None,
         "HAS_PROFILE_PHOTO": bool(has_photo),
         "PHOTO_COUNT": int(row.get("PHOTO_COUNT") or (1 if has_photo else 0)),
+        "RELATIONSHIP_STATUS": status,
+        "OPEN_TO_DATES": open_to_dates,
+        "PROFILE_VISIBILITY": visibility,
         "CREATED_AT": row.get("CREATED_AT"),
         "UPDATED_AT": row.get("UPDATED_AT"),
     }
@@ -278,6 +309,11 @@ def is_profile_complete(profile: dict[str, Any] | None) -> bool:
     dietary = _as_list(profile.get("DIETARY_NEEDS"))
     activities = _as_list(profile.get("ACTIVITY_PREFERENCES"))
     terms = profile.get("ACCEPTED_TERMS_AT")
+    status = (profile.get("RELATIONSHIP_STATUS") or "").strip()
+    if status not in RELATIONSHIP_STATUS_KEYS:
+        return False
+    if status in RELATIONSHIP_STATUS_SOLO and profile.get("OPEN_TO_DATES") is None:
+        return False
     return bool(
         first and last and city and neighbourhood and dietary and activities and terms
     )
@@ -293,6 +329,8 @@ def compute_profile_complete_flag(payload: dict[str, Any]) -> bool:
             "DIETARY_NEEDS": payload.get("dietary_needs"),
             "ACTIVITY_PREFERENCES": payload.get("activity_preferences"),
             "ACCEPTED_TERMS_AT": payload.get("accepted_terms_at"),
+            "RELATIONSHIP_STATUS": payload.get("relationship_status"),
+            "OPEN_TO_DATES": payload.get("open_to_dates"),
             "PROFILE_COMPLETE": False,
         }
     )
@@ -588,6 +626,9 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
             accepted_terms_at,
             marketing_opt_in,
             profile_complete,
+            relationship_status,
+            open_to_dates,
+            profile_visibility,
             {photo_cols}
             (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
                 as has_profile_photo,
@@ -597,7 +638,34 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
         where lower(user_email) = lower(%s)
         limit 1
     """
-    rows = run_query(sql, [email_n])
+    try:
+        rows = run_query(sql, [email_n])
+    except Exception:
+        # Older DBs before relationship columns — fall back without them.
+        sql_legacy = f"""
+            select
+                user_email,
+                first_name,
+                last_name,
+                date_of_birth,
+                phone,
+                city,
+                neighbourhood,
+                dietary_needs,
+                activity_preferences,
+                accepted_terms_at,
+                marketing_opt_in,
+                profile_complete,
+                {photo_cols}
+                (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
+                    as has_profile_photo,
+                created_at,
+                updated_at
+            from {table}
+            where lower(user_email) = lower(%s)
+            limit 1
+        """
+        rows = run_query(sql_legacy, [email_n])
     row = normalize_profile_row(rows[0] if rows else None)
     if not row:
         return None
@@ -647,6 +715,8 @@ def upsert_profile(
     marketing_opt_in: bool = False,
     date_of_birth: date | None = None,
     phone: str | None = None,
+    relationship_status: str | None = None,
+    open_to_dates: bool | None = None,
     profile_photo_b64: str | None = None,
     profile_photo_mime: str | None = None,
     update_photo: bool = False,
@@ -658,6 +728,13 @@ def upsert_profile(
     if backend() != "postgres":
         raise RuntimeError("User profiles are only supported on Neon Postgres.")
 
+    try:
+        from partner_store import ensure_relationship_schema
+
+        ensure_relationship_schema()
+    except Exception:
+        pass
+
     email_n = email.strip().lower()
     first = first_name.strip()
     last = last_name.strip()
@@ -668,6 +745,21 @@ def upsert_profile(
     phone_n = (phone or "").strip() or None
 
     prior = existing
+    status = (relationship_status or (prior or {}).get("RELATIONSHIP_STATUS") or "").strip()
+    if status and status not in RELATIONSHIP_STATUS_KEYS:
+        status = ""
+    if status in RELATIONSHIP_STATUS_PARTNERED:
+        open_n: bool | None = False
+    elif status in RELATIONSHIP_STATUS_SOLO:
+        if open_to_dates is None:
+            prior_open = (prior or {}).get("OPEN_TO_DATES")
+            open_n = None if prior_open is None else bool(prior_open)
+        else:
+            open_n = bool(open_to_dates)
+    else:
+        open_n = None
+    visibility = compute_profile_visibility(status or None, open_n)
+
     terms_at = accepted_terms_at
     if terms_at is None:
         if prior and prior.get("ACCEPTED_TERMS_AT"):
@@ -684,6 +776,8 @@ def upsert_profile(
             "dietary_needs": dietary,
             "activity_preferences": activities,
             "accepted_terms_at": terms_at,
+            "relationship_status": status or None,
+            "open_to_dates": open_n,
         }
     )
 
@@ -693,10 +787,12 @@ def upsert_profile(
             user_email, first_name, last_name, date_of_birth, phone,
             city, neighbourhood, dietary_needs, activity_preferences,
             accepted_terms_at, marketing_opt_in, profile_complete,
+            relationship_status, open_to_dates, profile_visibility,
             created_at, updated_at
         ) values (
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
+            %s, %s, %s,
             %s, %s, %s,
             NOW(), NOW()
         )
@@ -712,6 +808,9 @@ def upsert_profile(
             accepted_terms_at = excluded.accepted_terms_at,
             marketing_opt_in = excluded.marketing_opt_in,
             profile_complete = excluded.profile_complete,
+            relationship_status = excluded.relationship_status,
+            open_to_dates = excluded.open_to_dates,
+            profile_visibility = excluded.profile_visibility,
             updated_at = NOW()
     """
     params: list[Any] = [
@@ -727,6 +826,9 @@ def upsert_profile(
         terms_at,
         bool(marketing_opt_in),
         complete,
+        status or None,
+        open_n,
+        visibility,
     ]
     execute_write(sql, params)
 
@@ -774,6 +876,9 @@ def upsert_profile(
         "ACCEPTED_TERMS_AT": terms_at,
         "MARKETING_OPT_IN": bool(marketing_opt_in),
         "PROFILE_COMPLETE": complete,
+        "RELATIONSHIP_STATUS": status or None,
+        "OPEN_TO_DATES": open_n,
+        "PROFILE_VISIBILITY": visibility,
         "PROFILE_PHOTO_B64": primary_b64,
         "PROFILE_PHOTO_MIME": primary_mime,
         "HAS_PROFILE_PHOTO": has_photo,
