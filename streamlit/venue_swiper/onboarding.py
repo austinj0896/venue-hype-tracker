@@ -49,15 +49,16 @@ def onboarding_css() -> str:
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 2rem 1rem 1.5rem;
+    padding: 2.25rem 1.25rem 1.75rem;
     margin: 0.25rem 0 1rem;
     border-radius: 20px;
     background:
-        radial-gradient(120% 80% at 50% 20%, rgba(211,163,69,0.18) 0%, transparent 55%),
-        linear-gradient(180deg, #2A1A12 0%, #1A100C 55%, #120C09 100%);
-    border: 1px solid rgba(211, 163, 69, 0.18);
+        radial-gradient(90% 70% at 50% 35%, rgba(211,163,69,0.12) 0%, transparent 58%),
+        #000000;
+    border: 1px solid rgba(211, 163, 69, 0.14);
     box-shadow: 0 18px 40px rgba(44, 26, 16, 0.18);
     animation: apres-fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    overflow: hidden;
 }
 @supports (height: 1dvh) {
     .ob-splash {
@@ -66,10 +67,12 @@ def onboarding_css() -> str:
 }
 .ob-mark,
 .apres-brand-hero {
-    width: min(100%, 260px);
+    width: min(88%, 240px);
     height: auto;
     display: block;
-    margin: 0 auto 1.1rem;
+    margin: 0 auto 1.15rem;
+    /* Optical center: left swash on A pulls weight left */
+    transform: translateX(4%);
 }
 .ob-tagline {
     font-family: 'Cormorant Garamond', Georgia, serif;

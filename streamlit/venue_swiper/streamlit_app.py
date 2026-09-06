@@ -198,6 +198,7 @@ h1, h2, h3 {{
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.75rem;
     font-size: 11px;
     font-weight: 500;
     color: var(--brown);
@@ -214,20 +215,25 @@ h1, h2, h3 {{
     letter-spacing: 0.01em;
     text-transform: none;
     color: var(--text-mid);
+    flex: 1;
+    text-align: right;
+    min-width: 0;
 }}
 .apres-brand-header {{
-    height: 36px;
+    height: 34px;
     width: auto;
-    max-width: 160px;
+    max-width: min(46vw, 168px);
     object-fit: contain;
     object-position: left center;
     display: block;
+    flex-shrink: 0;
 }}
 .apres-brand-hero {{
-    width: min(100%, 280px);
+    width: min(88%, 240px);
     height: auto;
     display: block;
     margin: 0 auto 0.9rem;
+    transform: translateX(4%);
 }}
 .apres-brand-text {{
     font-family: {FONT_DISPLAY};
@@ -1371,7 +1377,6 @@ def render_apres_header(subtitle: str = "Manhattan Beach", photo_uri: str | None
         <div class="apres-status">
             {mark}
             <span class="tagline">Find what comes next.</span>
-            <span>&middot;</span>
         </div>
         """,
         unsafe_allow_html=True,
