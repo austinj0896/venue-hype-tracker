@@ -15,9 +15,10 @@ from profile_options import (
     neighbourhoods_for_city,
 )
 from user_profiles_store import (
+    MAX_PROFILE_PHOTOS,
     clear_profile_cache,
-    fetch_profile_photo,
     is_profile_complete,
+    list_profile_photos,
     photo_bytes,
     prepare_profile_photo,
     upsert_profile,
@@ -46,9 +47,9 @@ def _empty_draft(email: str, existing: dict[str, Any] | None = None) -> dict[str
             "activity_preferences": activities,
             "accepted_terms": bool(existing.get("ACCEPTED_TERMS_AT")),
             "marketing_opt_in": bool(existing.get("MARKETING_OPT_IN")),
-            "photo_b64": existing.get("PROFILE_PHOTO_B64"),
-            "photo_mime": existing.get("PROFILE_PHOTO_MIME"),
-            "photo_changed": False,
+            "photos": [],
+            "photos_changed": False,
+            "photos_loaded": False,
         }
     return {
         "email": email,
@@ -62,9 +63,9 @@ def _empty_draft(email: str, existing: dict[str, Any] | None = None) -> dict[str
         "activity_preferences": [],
         "accepted_terms": False,
         "marketing_opt_in": False,
-        "photo_b64": None,
-        "photo_mime": None,
-        "photo_changed": False,
+        "photos": [],
+        "photos_changed": False,
+        "photos_loaded": False,
     }
 
 
@@ -103,70 +104,110 @@ def _neighbourhood_select(
     return st.selectbox(label, hoods, index=index, key=key)
 
 
-def _hydrate_draft_photo(email: str, draft: dict[str, Any], profile: dict[str, Any]) -> None:
-    """Load photo bytes once into the draft when the profile only has a flag."""
-    if draft.get("photo_b64") or draft.get("photo_changed"):
+def _hydrate_draft_photos(email: str, draft: dict[str, Any], profile: dict[str, Any] | None = None) -> None:
+    """Load gallery into draft once (unless the user already edited photos this session)."""
+    if draft.get("photos_loaded") or draft.get("photos_changed"):
         return
-    if not profile.get("HAS_PROFILE_PHOTO"):
-        return
+    if not (profile or {}).get("HAS_PROFILE_PHOTO") and not draft.get("photos"):
+        # Still try list — covers gallery-only rows without legacy flag.
+        pass
     try:
-        photo = fetch_profile_photo(email)
+        rows = list_profile_photos(email, include_bytes=True)
     except Exception:
+        draft["photos_loaded"] = True
+        _save_draft(draft)
         return
-    if not photo or not photo.get("PROFILE_PHOTO_B64"):
-        return
-    draft["photo_b64"] = photo.get("PROFILE_PHOTO_B64")
-    draft["photo_mime"] = photo.get("PROFILE_PHOTO_MIME") or "image/jpeg"
+    draft["photos"] = [
+        {
+            "PHOTO_B64": r.get("PHOTO_B64"),
+            "PHOTO_MIME": r.get("PHOTO_MIME") or "image/jpeg",
+        }
+        for r in rows
+        if r.get("PHOTO_B64")
+    ]
+    draft["photos_loaded"] = True
     _save_draft(draft)
 
 
 def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
-    """Optional profile photo upload; mutates draft in place when Continue/Save runs.
+    """Multi-photo gallery: up to MAX_PROFILE_PHOTOS, first is primary/avatar."""
+    st.markdown("Photos (optional)")
+    st.caption(f"Add up to {MAX_PROFILE_PHOTOS}. First photo is your main avatar.")
 
-    Streamlit file_uploader only yields a file on the run it was chosen, so we
-    process immediately into draft photo_b64 when a new upload appears.
-    """
-    st.markdown("Profile photo (optional)")
-    current_bytes = photo_bytes(draft.get("photo_b64"))
-    if current_bytes:
-        left, right = st.columns([1, 3])
-        with left:
-            st.image(current_bytes, width=96)
-        with right:
-            st.caption("Current photo")
-            if st.button("Remove photo", key=f"{key_prefix}_clear_photo"):
-                draft["photo_b64"] = None
-                draft["photo_mime"] = None
-                draft["photo_changed"] = True
-                draft.pop("_photo_upload_marker", None)
-                st.session_state.pop(f"{key_prefix}_photo_upload", None)
-                _save_draft(draft)
-                st.rerun()
+    photos: list[dict[str, Any]] = list(draft.get("photos") or [])
+    if photos:
+        cols = st.columns(min(3, len(photos)))
+        for i, photo in enumerate(photos):
+            with cols[i % len(cols)]:
+                raw = photo_bytes(photo.get("PHOTO_B64"))
+                if raw:
+                    st.image(raw, width=96)
+                label = "Primary" if i == 0 else f"Photo {i + 1}"
+                st.caption(label)
+                b1, b2, b3 = st.columns(3)
+                with b1:
+                    if i > 0 and st.button("↑", key=f"{key_prefix}_up_{i}", help="Move earlier"):
+                        photos[i - 1], photos[i] = photos[i], photos[i - 1]
+                        draft["photos"] = photos
+                        draft["photos_changed"] = True
+                        _save_draft(draft)
+                        st.rerun()
+                with b2:
+                    if i < len(photos) - 1 and st.button(
+                        "↓", key=f"{key_prefix}_down_{i}", help="Move later"
+                    ):
+                        photos[i + 1], photos[i] = photos[i], photos[i + 1]
+                        draft["photos"] = photos
+                        draft["photos_changed"] = True
+                        _save_draft(draft)
+                        st.rerun()
+                with b3:
+                    if st.button("✕", key=f"{key_prefix}_del_{i}", help="Remove"):
+                        photos.pop(i)
+                        draft["photos"] = photos
+                        draft["photos_changed"] = True
+                        draft.pop("_photo_upload_marker", None)
+                        _save_draft(draft)
+                        st.rerun()
 
-    uploaded = st.file_uploader(
-        "Upload a photo",
-        type=["jpg", "jpeg", "png", "webp"],
-        accept_multiple_files=False,
-        key=f"{key_prefix}_photo_upload",
-        label_visibility="collapsed",
-    )
-    if uploaded is not None:
-        # Dedupe: same name+size already applied this session.
-        marker = f"{uploaded.name}:{getattr(uploaded, 'size', 0)}"
-        if draft.get("_photo_upload_marker") != marker:
-            try:
-                b64, mime = prepare_profile_photo(uploaded)
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Could not use that photo: {exc}")
-            else:
-                draft["photo_b64"] = b64
-                draft["photo_mime"] = mime
-                draft["photo_changed"] = True
+    remaining = MAX_PROFILE_PHOTOS - len(photos)
+    if remaining > 0:
+        uploaded = st.file_uploader(
+            "Add photos",
+            type=["jpg", "jpeg", "png", "webp"],
+            accept_multiple_files=True,
+            key=f"{key_prefix}_photo_upload",
+            label_visibility="collapsed",
+        )
+        if uploaded:
+            marker = "|".join(
+                f"{f.name}:{getattr(f, 'size', 0)}" for f in uploaded
+            )
+            if draft.get("_photo_upload_marker") != marker:
+                added = 0
+                errors: list[str] = []
+                for f in uploaded:
+                    if len(photos) >= MAX_PROFILE_PHOTOS:
+                        break
+                    try:
+                        b64, mime = prepare_profile_photo(f)
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(f"{f.name}: {exc}")
+                        continue
+                    photos.append({"PHOTO_B64": b64, "PHOTO_MIME": mime})
+                    added += 1
+                draft["photos"] = photos
+                draft["photos_changed"] = True
                 draft["_photo_upload_marker"] = marker
                 _save_draft(draft)
-                st.image(photo_bytes(b64), width=96)
-                st.caption("Photo ready. It’ll save with your profile.")
-    st.caption("JPG, PNG, or WebP · under 5 MB · resized to fit.")
+                if added:
+                    st.caption(f"Added {added}. They’ll save with your profile.")
+                for err in errors[:3]:
+                    st.error(err)
+    else:
+        st.caption("Photo limit reached — remove one to add another.")
+
+    st.caption("JPG, PNG, or WebP · under 5 MB each · resized to fit.")
 
 
 def _progress_html(step: int, total: int = 4) -> str:
@@ -332,6 +373,7 @@ def _nav(back: bool = True, next_label: str = "Continue", next_key: str = "profi
 
 def _render_step_about(draft: dict[str, Any]) -> None:
     st.markdown('<div class="section-label">About you</div>', unsafe_allow_html=True)
+    _hydrate_draft_photos(str(draft.get("email") or ""), draft, None)
     _render_photo_picker(draft, key_prefix="pf")
 
     first = st.text_input("First name", value=draft.get("first_name") or "", key="pf_first")
@@ -507,9 +549,8 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
             if isinstance(draft.get("date_of_birth"), date)
             else None,
             phone=str(draft.get("phone") or "") or None,
-            profile_photo_b64=draft.get("photo_b64"),
-            profile_photo_mime=draft.get("photo_mime"),
-            update_photo=bool(draft.get("photo_changed")),
+            photos=list(draft.get("photos") or []),
+            update_photos=True,
             mark_complete=True,
         )
     except Exception as exc:  # noqa: BLE001
@@ -551,7 +592,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     )
 
     draft = _get_draft(email, profile)
-    _hydrate_draft_photo(email, draft, profile)
+    _hydrate_draft_photos(email, draft, profile)
     _render_photo_picker(draft, key_prefix="edit")
 
     c1, c2 = st.columns(2)
@@ -638,9 +679,8 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
                     marketing_opt_in=bool(marketing),
                     date_of_birth=dob if isinstance(dob, date) else None,
                     phone=phone.strip() or None,
-                    profile_photo_b64=draft.get("photo_b64"),
-                    profile_photo_mime=draft.get("photo_mime"),
-                    update_photo=bool(draft.get("photo_changed")),
+                    photos=list(draft.get("photos") or []),
+                    update_photos=bool(draft.get("photos_changed")),
                     mark_complete=True,
                     existing=profile,
                 )

@@ -230,10 +230,12 @@ h1, h2, h3 {{
     image-rendering: -webkit-optimize-contrast;
 }}
 .apres-brand-hero {{
-    width: min(86%, 280px);
+    width: min(72vw, 280px);
     height: auto;
     display: block;
-    margin: 0 auto 0.9rem;
+    margin: 0 auto;
+    object-fit: contain;
+    image-rendering: -webkit-optimize-contrast;
 }}
 div[data-testid="stImage"] img {{
     image-rendering: -webkit-optimize-contrast;
@@ -2174,7 +2176,6 @@ def render_plan_date(email: str) -> None:
 
 def render_login() -> None:
     from onboarding import LOGIN_MODE_KEY
-    from brand import wordmark_path
 
     returning = st.session_state.get(LOGIN_MODE_KEY) == "returning"
     if returning:
@@ -2184,23 +2185,16 @@ def render_login() -> None:
         title = "Create your account."
         hint = "A few taste questions come next, so Discover and dates fit you sooner."
 
-    mark = wordmark_path()
-    brand_col, tag_col = st.columns([1.15, 2])
-    with brand_col:
-        if mark is not None:
-            st.image(str(mark), width=160)
-        else:
-            st.markdown(
-                '<div class="apres-brand-text" style="font-size:22px;line-height:1;">Après</div>',
-                unsafe_allow_html=True,
-            )
-    with tag_col:
-        st.markdown(
-            '<p class="tagline" style="text-align:right;margin:0.55rem 0 0;'
-            'font-family:Cormorant Garamond,Georgia,serif;font-style:italic;'
-            'color:#7A5B48;font-size:14px;">Find what comes next.</p>',
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        f'<div style="display:flex;flex-direction:column;align-items:center;'
+        f'gap:0.35rem;margin:0.35rem 0 0.85rem;text-align:center;">'
+        f'{brand_mark_html(size="header")}'
+        f'<p class="tagline" style="margin:0;text-align:center;'
+        f'font-family:Cormorant Garamond,Georgia,serif;font-style:italic;'
+        f'color:#7A5B48;font-size:14px;">Find what comes next.</p>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
         f"""

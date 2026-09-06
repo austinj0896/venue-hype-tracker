@@ -9,14 +9,22 @@ from typing import Any
 
 import streamlit as st
 
-from db import backend, execute_write, run_query, user_profiles_table
+from db import (
+    backend,
+    execute_write,
+    run_query,
+    user_profile_photos_table,
+    user_profiles_table,
+)
 
 _SCHEMA_APPLIED_KEY = "_user_profiles_schema_ok"
+_PHOTOS_SCHEMA_KEY = "_user_profile_photos_schema_ok"
 
 # Upload/compress limits for profile photos stored in Neon as base64.
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_PHOTO_EDGE = 512
 JPEG_QUALITY = 85
+MAX_PROFILE_PHOTOS = 6
 
 
 def ensure_schema() -> None:
@@ -25,7 +33,6 @@ def ensure_schema() -> None:
         return
     if st.session_state.get(_SCHEMA_APPLIED_KEY):
         return
-    # Single statement — more reliable than multi-statement execute via psycopg2.
     table = user_profiles_table()
     try:
         execute_write(
@@ -72,8 +79,39 @@ def ensure_schema() -> None:
             pass
         st.session_state[_SCHEMA_APPLIED_KEY] = True
     except Exception:
-        # Leave flag unset so the next request can retry.
         raise
+
+
+def ensure_photos_schema() -> None:
+    """Create gallery table if missing. One CREATE — safe to call from photo paths."""
+    if backend() != "postgres":
+        return
+    if st.session_state.get(_PHOTOS_SCHEMA_KEY):
+        return
+    table = user_profile_photos_table()
+    execute_write(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            photo_id       BIGSERIAL PRIMARY KEY,
+            user_email     TEXT NOT NULL,
+            sort_order     INTEGER NOT NULL DEFAULT 0,
+            photo_b64      TEXT NOT NULL,
+            photo_mime     TEXT NOT NULL DEFAULT 'image/jpeg',
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_{table}_order UNIQUE (user_email, sort_order)
+        )
+        """,
+        [],
+    )
+    try:
+        execute_write(
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_user ON {table} (user_email, sort_order)",
+            [],
+        )
+    except Exception:
+        pass
+    st.session_state[_PHOTOS_SCHEMA_KEY] = True
 
 
 def prepare_profile_photo(uploaded_file: Any) -> tuple[str, str]:
@@ -121,7 +159,6 @@ def _as_list(value: Any) -> list[str]:
     text = str(value).strip()
     if not text:
         return []
-    # Postgres array text form: {a,b}
     if text.startswith("{") and text.endswith("}"):
         inner = text[1:-1]
         if not inner:
@@ -152,25 +189,17 @@ def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "PROFILE_PHOTO_B64": row.get("PROFILE_PHOTO_B64") or None,
         "PROFILE_PHOTO_MIME": (row.get("PROFILE_PHOTO_MIME") or "").strip() or None,
         "HAS_PROFILE_PHOTO": bool(has_photo),
+        "PHOTO_COUNT": int(row.get("PHOTO_COUNT") or (1 if has_photo else 0)),
         "CREATED_AT": row.get("CREATED_AT"),
         "UPDATED_AT": row.get("UPDATED_AT"),
     }
 
 
 def is_profile_complete(profile: dict[str, Any] | None) -> bool:
-    """True only when all required basic-setup fields are present.
-
-    Ratings / planned dates do not count. On non-Postgres backends the
-    profile feature is skipped so SiS keeps working until a table exists.
-    Photo is optional.
-    """
     if backend() != "postgres":
         return True
     if not profile:
         return False
-    if profile.get("PROFILE_COMPLETE") is True:
-        # Still verify required fields in case of a bad write.
-        pass
     first = (profile.get("FIRST_NAME") or "").strip()
     last = (profile.get("LAST_NAME") or "").strip()
     city = (profile.get("CITY") or "").strip()
@@ -179,13 +208,7 @@ def is_profile_complete(profile: dict[str, Any] | None) -> bool:
     activities = _as_list(profile.get("ACTIVITY_PREFERENCES"))
     terms = profile.get("ACCEPTED_TERMS_AT")
     return bool(
-        first
-        and last
-        and city
-        and neighbourhood
-        and dietary
-        and activities
-        and terms
+        first and last and city and neighbourhood and dietary and activities and terms
     )
 
 
@@ -204,81 +227,109 @@ def compute_profile_complete_flag(payload: dict[str, Any]) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=30)
-def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | None:
-    """Load profile. Photo bytes are opt-in — base64 blobs stall mobile after login.
+def _normalize_photo_row(row: dict[str, Any], *, include_bytes: bool) -> dict[str, Any]:
+    b64 = row.get("PHOTO_B64") or row.get("PROFILE_PHOTO_B64")
+    mime = (row.get("PHOTO_MIME") or row.get("PROFILE_PHOTO_MIME") or "image/jpeg").strip()
+    out: dict[str, Any] = {
+        "PHOTO_ID": row.get("PHOTO_ID"),
+        "SORT_ORDER": int(row.get("SORT_ORDER") or 0),
+        "PHOTO_MIME": mime or "image/jpeg",
+        "IS_PRIMARY": int(row.get("SORT_ORDER") or 0) == 0,
+    }
+    if include_bytes:
+        out["PHOTO_B64"] = b64
+    return out
 
-    Does not run DDL on the hot path (table is expected to already exist on Neon).
-    """
-    if not email or backend() != "postgres":
-        return None
-    table = user_profiles_table()
-    photo_cols = (
-        "profile_photo_b64, profile_photo_mime,"
-        if include_photo
-        else ""
-    )
-    sql = f"""
-        select
-            user_email,
-            first_name,
-            last_name,
-            date_of_birth,
-            phone,
-            city,
-            neighbourhood,
-            dietary_needs,
-            activity_preferences,
-            accepted_terms_at,
-            marketing_opt_in,
-            profile_complete,
-            {photo_cols}
-            (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
-                as has_profile_photo,
-            created_at,
-            updated_at
-        from {table}
+
+def _migrate_legacy_photo(email_n: str) -> list[dict[str, Any]]:
+    profiles = user_profiles_table()
+    photos = user_profile_photos_table()
+    rows = run_query(
+        f"""
+        select profile_photo_b64, profile_photo_mime
+        from {profiles}
         where lower(user_email) = lower(%s)
+          and profile_photo_b64 is not null
+          and length(profile_photo_b64) > 0
         limit 1
-    """
+        """,
+        [email_n],
+    )
+    if not rows:
+        return []
+    b64 = rows[0].get("PROFILE_PHOTO_B64")
+    mime = (rows[0].get("PROFILE_PHOTO_MIME") or "image/jpeg").strip() or "image/jpeg"
+    if not b64:
+        return []
+    execute_write(
+        f"""
+        insert into {photos} (user_email, sort_order, photo_b64, photo_mime, created_at, updated_at)
+        values (%s, 0, %s, %s, NOW(), NOW())
+        on conflict (user_email, sort_order) do nothing
+        """,
+        [email_n, b64, mime],
+    )
+    return [
+        {
+            "PHOTO_ID": None,
+            "SORT_ORDER": 0,
+            "PHOTO_B64": b64,
+            "PHOTO_MIME": mime,
+            "IS_PRIMARY": True,
+        }
+    ]
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def list_profile_photos(email: str, include_bytes: bool = True) -> list[dict[str, Any]]:
+    """Ordered gallery photos. First entry is the primary/avatar."""
+    if not email or backend() != "postgres":
+        return []
     email_n = email.strip().lower()
     try:
-        rows = run_query(sql, [email_n])
+        ensure_photos_schema()
     except Exception:
-        # Don't swallow DB errors as "no profile" — that sends returning users
-        # through setup again when Neon/pooler flaps.
-        raise
-    row = normalize_profile_row(rows[0] if rows else None)
-    if row and not include_photo:
-        row["PROFILE_PHOTO_B64"] = None
-        row["PROFILE_PHOTO_MIME"] = None
-    return row
-
-
-def _profile_has_photo(email: str) -> bool:
-    """Cheap flag for avatar without loading base64."""
-    if backend() != "postgres":
-        return False
-    table = user_profiles_table()
+        st.session_state[_PHOTOS_SCHEMA_KEY] = True
+    photos_t = user_profile_photos_table()
     try:
         rows = run_query(
             f"""
-            select 1 as ok
-            from {table}
-            where user_email = %s
-              and profile_photo_b64 is not null
-              and length(profile_photo_b64) > 0
-            limit 1
+            select photo_id, sort_order, photo_b64, photo_mime
+            from {photos_t}
+            where lower(user_email) = lower(%s)
+            order by sort_order asc, photo_id asc
+            limit {MAX_PROFILE_PHOTOS}
             """,
-            [email],
+            [email_n],
         )
-        return bool(rows)
     except Exception:
-        return False
+        rows = []
+    if rows:
+        return [_normalize_photo_row(r, include_bytes=include_bytes) for r in rows]
+    try:
+        migrated = _migrate_legacy_photo(email_n)
+    except Exception:
+        migrated = []
+    if migrated:
+        clear_profile_cache()
+        if include_bytes:
+            return migrated
+        return [{k: v for k, v in migrated[0].items() if k != "PHOTO_B64"}]
+    return []
 
 
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_profile_photo(email: str) -> dict[str, str | None] | None:
+    """Primary photo for header avatar (gallery first, then legacy column)."""
+    photos = list_profile_photos(email, include_bytes=True)
+    if photos:
+        p0 = photos[0]
+        b64 = p0.get("PHOTO_B64")
+        if b64:
+            return {
+                "PROFILE_PHOTO_B64": b64,
+                "PROFILE_PHOTO_MIME": p0.get("PHOTO_MIME") or "image/jpeg",
+            }
     if not email or backend() != "postgres":
         return None
     table = user_profiles_table()
@@ -306,8 +357,131 @@ def fetch_profile_photo(email: str) -> dict[str, str | None] | None:
     }
 
 
+def save_profile_photos(email: str, photos: list[dict[str, Any]]) -> int:
+    """Replace the user's gallery. ``photos`` is ordered; index 0 is primary."""
+    if backend() != "postgres":
+        raise RuntimeError("User photos are only supported on Neon Postgres.")
+    ensure_photos_schema()
+    email_n = email.strip().lower()
+    photos_t = user_profile_photos_table()
+    profiles_t = user_profiles_table()
+
+    cleaned: list[tuple[str, str]] = []
+    for item in photos[:MAX_PROFILE_PHOTOS]:
+        b64 = (item.get("PHOTO_B64") or item.get("photo_b64") or "").strip()
+        if not b64:
+            continue
+        mime = item.get("PHOTO_MIME") or item.get("photo_mime") or "image/jpeg"
+        mime_n = str(mime).strip() or "image/jpeg"
+        cleaned.append((b64, mime_n))
+
+    execute_write(f"delete from {photos_t} where lower(user_email) = lower(%s)", [email_n])
+    for idx, (b64, mime) in enumerate(cleaned):
+        execute_write(
+            f"""
+            insert into {photos_t} (user_email, sort_order, photo_b64, photo_mime, created_at, updated_at)
+            values (%s, %s, %s, %s, NOW(), NOW())
+            """,
+            [email_n, idx, b64, mime],
+        )
+
+    if cleaned:
+        execute_write(
+            f"""
+            update {profiles_t}
+            set profile_photo_b64 = %s,
+                profile_photo_mime = %s,
+                updated_at = NOW()
+            where lower(user_email) = lower(%s)
+            """,
+            [cleaned[0][0], cleaned[0][1], email_n],
+        )
+    else:
+        execute_write(
+            f"""
+            update {profiles_t}
+            set profile_photo_b64 = null,
+                profile_photo_mime = null,
+                updated_at = NOW()
+            where lower(user_email) = lower(%s)
+            """,
+            [email_n],
+        )
+    clear_profile_cache()
+    return len(cleaned)
+
+
+@st.cache_data(show_spinner=False, ttl=30)
+def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | None:
+    """Load profile. Does not run DDL on the hot path."""
+    if not email or backend() != "postgres":
+        return None
+    table = user_profiles_table()
+    photos_t = user_profile_photos_table()
+    photo_cols = (
+        "p.profile_photo_b64, p.profile_photo_mime,"
+        if include_photo
+        else ""
+    )
+    sql = f"""
+        select
+            p.user_email,
+            p.first_name,
+            p.last_name,
+            p.date_of_birth,
+            p.phone,
+            p.city,
+            p.neighbourhood,
+            p.dietary_needs,
+            p.activity_preferences,
+            p.accepted_terms_at,
+            p.marketing_opt_in,
+            p.profile_complete,
+            {photo_cols}
+            coalesce(
+                (select count(*)::int from {photos_t} g where lower(g.user_email) = lower(p.user_email)),
+                0
+            ) as photo_count,
+            (
+                exists (
+                    select 1 from {photos_t} g
+                    where lower(g.user_email) = lower(p.user_email)
+                )
+                or (p.profile_photo_b64 is not null and length(p.profile_photo_b64) > 0)
+            ) as has_profile_photo,
+            p.created_at,
+            p.updated_at
+        from {table} p
+        where lower(p.user_email) = lower(%s)
+        limit 1
+    """
+    email_n = email.strip().lower()
+    try:
+        rows = run_query(sql, [email_n])
+    except Exception:
+        sql_legacy = f"""
+            select
+                user_email, first_name, last_name, date_of_birth, phone,
+                city, neighbourhood, dietary_needs, activity_preferences,
+                accepted_terms_at, marketing_opt_in, profile_complete,
+                {"profile_photo_b64, profile_photo_mime," if include_photo else ""}
+                (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
+                    as has_profile_photo,
+                created_at, updated_at
+            from {table}
+            where lower(user_email) = lower(%s)
+            limit 1
+        """
+        rows = run_query(sql_legacy, [email_n])
+    row = normalize_profile_row(rows[0] if rows else None)
+    if row and not include_photo:
+        row["PROFILE_PHOTO_B64"] = None
+        row["PROFILE_PHOTO_MIME"] = None
+    return row
+
+
 def clear_profile_cache() -> None:
-    for fn in (fetch_profile, fetch_profile_photo):
+    for fn in (fetch_profile, fetch_profile_photo, list_profile_photos):
         try:
             fn.clear()
         except Exception:
@@ -330,13 +504,14 @@ def upsert_profile(
     profile_photo_b64: str | None = None,
     profile_photo_mime: str | None = None,
     update_photo: bool = False,
+    photos: list[dict[str, Any]] | None = None,
+    update_photos: bool = False,
     mark_complete: bool = True,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if backend() != "postgres":
         raise RuntimeError("User profiles are only supported on Neon Postgres.")
 
-    # Do not run DDL here — cold ensure_schema() has hung saves on the Neon pooler.
     email_n = email.strip().lower()
     first = first_name.strip()
     last = last_name.strip()
@@ -354,13 +529,6 @@ def upsert_profile(
         else:
             terms_at = datetime.utcnow()
 
-    if update_photo:
-        photo_b64 = profile_photo_b64 or None
-        photo_mime = (profile_photo_mime or "").strip() or None if photo_b64 else None
-    else:
-        photo_b64 = None
-        photo_mime = None
-
     complete = bool(mark_complete) and compute_profile_complete_flag(
         {
             "first_name": first,
@@ -374,77 +542,78 @@ def upsert_profile(
     )
 
     table = user_profiles_table()
-    if update_photo:
-        sql = f"""
-            insert into {table} (
-                user_email, first_name, last_name, date_of_birth, phone,
-                city, neighbourhood, dietary_needs, activity_preferences,
-                accepted_terms_at, marketing_opt_in, profile_complete,
-                profile_photo_b64, profile_photo_mime,
-                created_at, updated_at
-            ) values (
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s,
-                %s, %s,
-                NOW(), NOW()
-            )
-            on conflict (user_email) do update set
-                first_name = excluded.first_name,
-                last_name = excluded.last_name,
-                date_of_birth = excluded.date_of_birth,
-                phone = excluded.phone,
-                city = excluded.city,
-                neighbourhood = excluded.neighbourhood,
-                dietary_needs = excluded.dietary_needs,
-                activity_preferences = excluded.activity_preferences,
-                accepted_terms_at = excluded.accepted_terms_at,
-                marketing_opt_in = excluded.marketing_opt_in,
-                profile_complete = excluded.profile_complete,
-                profile_photo_b64 = excluded.profile_photo_b64,
-                profile_photo_mime = excluded.profile_photo_mime,
-                updated_at = NOW()
-        """
-        params: list[Any] = [
-            email_n, first, last, date_of_birth, phone_n,
-            city_n, hood, dietary, activities,
-            terms_at, bool(marketing_opt_in), complete,
-            photo_b64, photo_mime,
-        ]
-    else:
-        sql = f"""
-            insert into {table} (
-                user_email, first_name, last_name, date_of_birth, phone,
-                city, neighbourhood, dietary_needs, activity_preferences,
-                accepted_terms_at, marketing_opt_in, profile_complete,
-                created_at, updated_at
-            ) values (
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s,
-                NOW(), NOW()
-            )
-            on conflict (user_email) do update set
-                first_name = excluded.first_name,
-                last_name = excluded.last_name,
-                date_of_birth = excluded.date_of_birth,
-                phone = excluded.phone,
-                city = excluded.city,
-                neighbourhood = excluded.neighbourhood,
-                dietary_needs = excluded.dietary_needs,
-                activity_preferences = excluded.activity_preferences,
-                accepted_terms_at = excluded.accepted_terms_at,
-                marketing_opt_in = excluded.marketing_opt_in,
-                profile_complete = excluded.profile_complete,
-                updated_at = NOW()
-        """
-        params = [
-            email_n, first, last, date_of_birth, phone_n,
-            city_n, hood, dietary, activities,
-            terms_at, bool(marketing_opt_in), complete,
-        ]
-
+    sql = f"""
+        insert into {table} (
+            user_email, first_name, last_name, date_of_birth, phone,
+            city, neighbourhood, dietary_needs, activity_preferences,
+            accepted_terms_at, marketing_opt_in, profile_complete,
+            created_at, updated_at
+        ) values (
+            %s, %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s,
+            NOW(), NOW()
+        )
+        on conflict (user_email) do update set
+            first_name = excluded.first_name,
+            last_name = excluded.last_name,
+            date_of_birth = excluded.date_of_birth,
+            phone = excluded.phone,
+            city = excluded.city,
+            neighbourhood = excluded.neighbourhood,
+            dietary_needs = excluded.dietary_needs,
+            activity_preferences = excluded.activity_preferences,
+            accepted_terms_at = excluded.accepted_terms_at,
+            marketing_opt_in = excluded.marketing_opt_in,
+            profile_complete = excluded.profile_complete,
+            updated_at = NOW()
+    """
+    params: list[Any] = [
+        email_n,
+        first,
+        last,
+        date_of_birth,
+        phone_n,
+        city_n,
+        hood,
+        dietary,
+        activities,
+        terms_at,
+        bool(marketing_opt_in),
+        complete,
+    ]
     execute_write(sql, params)
+
+    photo_count = int((prior or {}).get("PHOTO_COUNT") or 0)
+    has_photo = bool((prior or {}).get("HAS_PROFILE_PHOTO"))
+    primary_b64 = None
+    primary_mime = None
+
+    if update_photos:
+        gallery = list(photos or [])
+        photo_count = save_profile_photos(email_n, gallery)
+        has_photo = photo_count > 0
+        if gallery:
+            primary_b64 = gallery[0].get("PHOTO_B64") or gallery[0].get("photo_b64")
+            primary_mime = gallery[0].get("PHOTO_MIME") or gallery[0].get("photo_mime")
+    elif update_photo:
+        if profile_photo_b64:
+            photo_count = save_profile_photos(
+                email_n,
+                [
+                    {
+                        "PHOTO_B64": profile_photo_b64,
+                        "PHOTO_MIME": profile_photo_mime or "image/jpeg",
+                    }
+                ],
+            )
+            has_photo = True
+            primary_b64 = profile_photo_b64
+            primary_mime = profile_photo_mime
+        else:
+            photo_count = save_profile_photos(email_n, [])
+            has_photo = False
+
     clear_profile_cache()
     return {
         "USER_EMAIL": email_n,
@@ -459,8 +628,8 @@ def upsert_profile(
         "ACCEPTED_TERMS_AT": terms_at,
         "MARKETING_OPT_IN": bool(marketing_opt_in),
         "PROFILE_COMPLETE": complete,
-        "PROFILE_PHOTO_B64": photo_b64 if update_photo else None,
-        "PROFILE_PHOTO_MIME": photo_mime if update_photo else None,
-        "HAS_PROFILE_PHOTO": bool(update_photo and photo_b64)
-        or bool((prior or {}).get("HAS_PROFILE_PHOTO")),
+        "PROFILE_PHOTO_B64": primary_b64,
+        "PROFILE_PHOTO_MIME": primary_mime,
+        "HAS_PROFILE_PHOTO": has_photo,
+        "PHOTO_COUNT": photo_count,
     }

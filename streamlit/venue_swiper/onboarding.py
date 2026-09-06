@@ -11,7 +11,7 @@ from html import escape
 import streamlit as st
 
 from app_log import log_event
-from brand import wordmark_path
+from brand import brand_mark_html
 
 ONBOARDING_DONE_KEY = "apres_onboarding_done"
 ONBOARDING_STEP_KEY = "apres_onboarding_step"
@@ -41,7 +41,21 @@ _SLIDES = (
 
 def onboarding_css() -> str:
     return """
-div[data-testid="stImage"] img {
+.ob-splash-brand {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    margin: 1.25rem auto 0.25rem;
+}
+.ob-splash-brand .apres-brand-hero,
+.ob-splash-brand img {
+    width: min(72vw, 280px) !important;
+    max-width: 280px;
+    height: auto !important;
+    margin: 0 auto;
+    display: block;
+    object-fit: contain;
     image-rendering: -webkit-optimize-contrast;
 }
 .ob-pulse {
@@ -137,21 +151,14 @@ def render_onboarding() -> None:
     step = int(st.session_state.get(ONBOARDING_STEP_KEY, 0))
 
     if step <= 0:
-        mark = wordmark_path()
-        # Fixed CSS width (not container stretch) keeps Streamlit from serving a soft upscale.
-        left, mid, right = st.columns([1, 3.2, 1])
-        with mid:
-            if mark is not None:
-                st.image(str(mark), width=280)
-            else:
-                st.markdown(
-                    '<div class="apres-brand-text" style="font-size:42px;text-align:center;">Après</div>',
-                    unsafe_allow_html=True,
-                )
-            st.markdown(
-                '<div class="ob-pulse" aria-hidden="true"></div>',
-                unsafe_allow_html=True,
-            )
+        st.markdown(
+            f'<div class="ob-splash-brand">{brand_mark_html(size="hero")}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="ob-pulse" aria-hidden="true"></div>',
+            unsafe_allow_html=True,
+        )
         if st.button("Get started", type="primary", use_container_width=True, key="ob_splash"):
             st.session_state[ONBOARDING_STEP_KEY] = 1
             st.session_state[LOGIN_MODE_KEY] = "new"
