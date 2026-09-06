@@ -1203,16 +1203,110 @@ def format_price_level(raw: str | None) -> str:
 
 
 def inject_styles() -> None:
-    """Inject Après CSS without st.iframe.
-
-    An empty measuring iframe (height=\"content\") has hung mobile Safari /
-    Streamlit Cloud after form submit — keep styles in markdown only.
-    """
+    """Inject Après CSS; keep styles in markdown (empty iframes can hang mobile Safari)."""
     st.markdown(
         f'<link rel="stylesheet" href="{FONT_URL}" />'
         f"<style>{APRES_CSS}</style>",
         unsafe_allow_html=True,
     )
+    # Angle-aware portrait lock (Bumble-style): keep UI upright when the phone rotates.
+    # A single CSS rotate(-90deg) only fixes one landscape direction and looked upside-down.
+    if not st.session_state.get("_apres_portrait_lock_injected"):
+        st.session_state["_apres_portrait_lock_injected"] = True
+        import streamlit.components.v1 as components
+
+        components.html(
+            """<!DOCTYPE html><html><body style="margin:0;padding:0">
+<script>
+(function() {
+  var win = window.parent;
+  var doc = win.document;
+  var html = doc.documentElement;
+  var STYLE_ID = "apres-portrait-lock-style";
+  function ensureStyle() {
+    if (doc.getElementById(STYLE_ID)) return;
+    var s = doc.createElement("style");
+    s.id = STYLE_ID;
+    s.textContent = [
+      "html.apres-plock, html.apres-plock body {",
+      "  overflow: hidden !important;",
+      "  margin: 0 !important;",
+      "}",
+      "html.apres-plock .stApp {",
+      "  min-height: 100% !important;",
+      "}"
+    ].join("");
+    doc.head.appendChild(s);
+  }
+  function clearLock() {
+    html.classList.remove("apres-plock");
+    html.style.removeProperty("transform");
+    html.style.removeProperty("-webkit-transform");
+    html.style.removeProperty("transform-origin");
+    html.style.removeProperty("-webkit-transform-origin");
+    html.style.removeProperty("width");
+    html.style.removeProperty("height");
+    html.style.removeProperty("position");
+    html.style.removeProperty("top");
+    html.style.removeProperty("left");
+    html.style.removeProperty("right");
+    html.style.removeProperty("margin");
+    html.style.removeProperty("padding");
+  }
+  function applyLock() {
+    try {
+      var coarse = win.matchMedia("(hover: none)").matches;
+      var narrow = Math.min(win.screen.width, win.screen.height) <= 950;
+      if (!coarse || !narrow) { clearLock(); return; }
+      var w = win.innerWidth || 0;
+      var h = win.innerHeight || 0;
+      if (h >= w) { clearLock(); return; }
+      var angle = 0;
+      try {
+        if (win.screen && win.screen.orientation && typeof win.screen.orientation.angle === "number") {
+          angle = win.screen.orientation.angle;
+        } else if (typeof win.orientation === "number") {
+          angle = win.orientation;
+        }
+      } catch (e) {}
+      ensureStyle();
+      html.classList.add("apres-plock");
+      html.style.position = "absolute";
+      html.style.margin = "0";
+      html.style.padding = "0";
+      html.style.width = h + "px";
+      html.style.height = w + "px";
+      // 90 / -270: home button left — rotate back -90
+      // -90 / 270: home button right — rotate back +90
+      if (angle === 90 || angle === -270) {
+        html.style.webkitTransformOrigin = "left top";
+        html.style.transformOrigin = "left top";
+        html.style.webkitTransform = "rotate(-90deg)";
+        html.style.transform = "rotate(-90deg)";
+        html.style.top = w + "px";
+        html.style.left = "0px";
+        html.style.right = "auto";
+      } else {
+        html.style.webkitTransformOrigin = "left top";
+        html.style.transformOrigin = "left top";
+        html.style.webkitTransform = "rotate(90deg)";
+        html.style.transform = "rotate(90deg)";
+        html.style.top = "0px";
+        html.style.left = h + "px";
+        html.style.right = "auto";
+      }
+    } catch (err) {
+      clearLock();
+    }
+  }
+  applyLock();
+  win.addEventListener("orientationchange", function() { setTimeout(applyLock, 120); });
+  win.addEventListener("resize", function() { setTimeout(applyLock, 60); });
+})();
+</script>
+</body></html>""",
+            height=0,
+        )
 
 
 def empty_state_html(*, eyebrow: str, title: str, body: str, action: str | None = None) -> str:
