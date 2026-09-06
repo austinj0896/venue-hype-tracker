@@ -356,7 +356,7 @@ def _consume_preview_close_query() -> None:
         pass
 
 
-@st.dialog("Preview", width="small", on_dismiss=_dismiss_profile_preview)
+@st.dialog(" ", width="small", on_dismiss=_dismiss_profile_preview)
 def _open_profile_preview_dialog(
     *,
     first_name: str,
@@ -369,10 +369,7 @@ def _open_profile_preview_dialog(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Modal profile preview — dismiss via X, Escape, or click outside."""
-    if st.button("Close preview", key="preview_dialog_close", use_container_width=True):
-        _dismiss_profile_preview()
-        st.rerun()
+    """Modal profile preview — dismiss via Close preview, Escape, or click outside."""
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -384,6 +381,9 @@ def _open_profile_preview_dialog(
         relationship_status=relationship_status,
         open_to_dates=open_to_dates,
     )
+    if st.button("Close preview", key="preview_dialog_close", use_container_width=True):
+        _dismiss_profile_preview()
+        st.rerun()
 
 
 def render_profile_preview_card(
@@ -439,8 +439,49 @@ def render_profile_preview_card(
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
-    # Photo-only iframe (no inner scroll) — dialog scrolls the text/chips smoothly.
-    photo_h = 340
+    # Photo-only iframe (no inner scroll). Keep short so name/chips fit with little dialog scroll.
+    photo_h = 280
+    # Collapse Streamlit dialog chrome + kill nested scroll traps (runs in parent doc).
+    polish_script = """
+<script>
+(function() {
+  function polishDialog() {
+    try {
+      var doc = window.parent.document;
+      var dlg = doc.querySelector('[data-testid="stDialog"]');
+      if (!dlg) return;
+      dlg.querySelectorAll('h2').forEach(function(h) {
+        h.style.cssText = 'display:none!important;height:0!important;margin:0!important;padding:0!important;';
+      });
+      var closeNodes = dlg.querySelectorAll(
+        'button[aria-label="Close"], button[kind="header"],' +
+        '[data-testid="stBaseButton-header"] button,' +
+        '[data-testid="stBaseButton-headerNoPadding"] button'
+      );
+      closeNodes.forEach(function(btn) {
+        var row = btn.closest('[data-testid="stHorizontalBlock"]') || btn.parentElement;
+        if (row) {
+          row.style.cssText = 'position:absolute;top:0;right:0;height:0;margin:0;padding:0;overflow:visible;z-index:40;';
+        }
+        btn.style.display = 'none';
+      });
+      dlg.style.padding = '0.25rem 0.35rem 0.5rem';
+      dlg.style.maxHeight = '92dvh';
+      dlg.style.overflowY = 'auto';
+      dlg.style.overflowX = 'hidden';
+      dlg.style.webkitOverflowScrolling = 'touch';
+      dlg.querySelectorAll('[data-testid="stVerticalBlock"]').forEach(function(el) {
+        el.style.maxHeight = 'none';
+        el.style.overflow = 'visible';
+      });
+    } catch (e) {}
+  }
+  polishDialog();
+  setTimeout(polishDialog, 50);
+  setTimeout(polishDialog, 200);
+})();
+</script>
+"""
     if n:
         uri0 = uris[idx] if uris[idx] else ""
         img_html = (
@@ -456,9 +497,6 @@ def render_profile_preview_card(
             '<div class="tap right" id="tapR" role="button" aria-label="Next photo"></div>'
             if n > 1
             else ""
-        )
-        close_btn = (
-            '<button type="button" class="close-x" id="closeX" aria-label="Close preview">×</button>'
         )
         nav_script = f"""
 <script>
@@ -499,35 +537,6 @@ def render_profile_preview_card(
   }}
   bind(document.getElementById("tapL"), -1);
   bind(document.getElementById("tapR"), 1);
-  function closePreview() {{
-    try {{
-      var root = window.parent.document;
-      var nodes = root.querySelectorAll(
-        '[data-testid="stDialog"] button[aria-label="Close"],' +
-        '[data-testid="stModal"] button[aria-label="Close"],' +
-        '[data-testid="stDialog"] button[kind="header"],' +
-        '[data-testid="stDialog"] [data-testid="stBaseButton-header"] button,' +
-        '[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button'
-      );
-      for (var i = 0; i < nodes.length; i++) {{
-        nodes[i].click();
-        return;
-      }}
-    }} catch (e) {{}}
-    try {{
-      var u = new URL(window.parent.location.href);
-      u.searchParams.set("{PREVIEW_CLOSE_QP}", "1");
-      window.parent.location.href = u.toString();
-    }} catch (e2) {{}}
-  }}
-  var cx = document.getElementById("closeX");
-  if (cx) {{
-    cx.addEventListener("click", function(e) {{
-      e.preventDefault();
-      e.stopPropagation();
-      closePreview();
-    }});
-  }}
 }})();
 </script>
 """
@@ -550,23 +559,13 @@ def render_profile_preview_card(
     color:rgba(248,230,210,.55); font:15px/1.4 system-ui,sans-serif; padding:1.5rem; text-align:center;
   }}
   .segs {{
-    position:absolute; top:12px; left:12px; right:56px; display:flex; gap:4px;
+    position:absolute; top:12px; left:12px; right:12px; display:flex; gap:4px;
     z-index:3; pointer-events:none;
   }}
   .seg {{ flex:1; height:3px; border-radius:99px; background:rgba(248,230,210,.28); }}
   .seg.on {{ background:#F8E6D2; }}
-  .close-x {{
-    position:absolute; top:8px; right:8px; z-index:8;
-    width:40px; height:40px; border:none; border-radius:999px;
-    background:rgba(44,26,16,0.55); color:#F8E6D2;
-    font-size:26px; line-height:1; cursor:pointer;
-    display:flex; align-items:center; justify-content:center;
-    -webkit-tap-highlight-color:transparent;
-    backdrop-filter: blur(6px);
-  }}
-  .close-x:active {{ background:rgba(44,26,16,0.75); }}
   .tap {{
-    position:absolute; top:48px; bottom:0; width:50%; z-index:4; cursor:pointer;
+    position:absolute; top:0; bottom:0; width:50%; z-index:4; cursor:pointer;
     -webkit-tap-highlight-color:transparent; touch-action:pan-y;
   }}
   .tap.left {{ left:0; }}
@@ -574,12 +573,12 @@ def render_profile_preview_card(
   .tap:active {{ background:rgba(248,230,210,.1); }}
 </style></head><body>
 <div class="stage">
-  {close_btn}
   <div class="segs" id="segs">{segments}</div>
   {img_html}
   {taps}
 </div>
 {nav_script}
+{polish_script}
 </body></html>""",
             height=photo_h,
             scrolling=False,
@@ -590,39 +589,12 @@ def render_profile_preview_card(
 <html><head><meta charset="utf-8"/>
 <style>
   html,body{{margin:0;background:#2C1A10}}
-  .wrap{{position:relative;height:{photo_h}px}}
-  .empty{{height:100%;display:flex;align-items:center;justify-content:center;
+  .empty{{height:{photo_h}px;display:flex;align-items:center;justify-content:center;
     color:rgba(248,230,210,.55);font:15px/1.4 system-ui,sans-serif;padding:1.5rem;text-align:center;
     border-radius:18px 18px 0 0}}
-  .close-x{{position:absolute;top:8px;right:8px;z-index:8;width:40px;height:40px;border:none;
-    border-radius:999px;background:rgba(44,26,16,.55);color:#F8E6D2;font-size:26px;line-height:1;
-    cursor:pointer;display:flex;align-items:center;justify-content:center}}
 </style></head><body>
-<div class="wrap">
-  <button type="button" class="close-x" id="closeX" aria-label="Close preview">×</button>
-  <div class="empty">Add photos to fill this card</div>
-</div>
-<script>
-(function(){{
-  function closePreview(){{
-    try {{
-      var root = window.parent.document;
-      var nodes = root.querySelectorAll(
-        '[data-testid="stDialog"] button[aria-label="Close"],' +
-        '[data-testid="stDialog"] button[kind="header"]'
-      );
-      for (var i=0;i<nodes.length;i++){{ nodes[i].click(); return; }}
-    }} catch(e){{}}
-    try {{
-      var u = new URL(window.parent.location.href);
-      u.searchParams.set("{PREVIEW_CLOSE_QP}", "1");
-      window.parent.location.href = u.toString();
-    }} catch(e2){{}}
-  }}
-  var cx = document.getElementById("closeX");
-  if (cx) cx.addEventListener("click", function(e){{ e.preventDefault(); closePreview(); }});
-}})();
-</script>
+<div class="empty">Add photos to fill this card</div>
+{polish_script}
 </body></html>""",
             height=photo_h,
             scrolling=False,
@@ -764,7 +736,8 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Preview dialog: visible close affordance + smooth single-axis scroll. */
+/* Preview dialog surface. Header collapse is JS-scoped to preview only
+   so Partner request keeps its title/close. */
 div[data-testid="stDialog"],
 div[data-testid="stModal"] {
     background: #2C1A10 !important;
@@ -776,39 +749,31 @@ div[data-testid="stDialog"] h2,
 div[data-testid="stDialog"] [data-testid="stWidgetLabel"] {
     color: #F8E6D2 !important;
 }
-/* Native Streamlit dialog X */
 div[data-testid="stDialog"] button[kind="header"],
 div[data-testid="stDialog"] button[aria-label="Close"],
 div[data-testid="stDialog"] [data-testid="stBaseButton-header"],
 div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button {
     color: #F8E6D2 !important;
     opacity: 1 !important;
-    font-size: 1.35rem !important;
-    min-width: 44px !important;
-    min-height: 44px !important;
 }
-/* Explicit ✕ button in the dialog body */
+/* Close preview: cream fill + dark label (dialog CSS was forcing light-on-light) */
+div[data-testid="stDialog"] button[kind="secondary"],
+div[data-testid="stDialog"] button[data-testid="baseButton-secondary"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] button {
+    background: #F8E6D2 !important;
+    border: 1px solid rgba(248, 230, 210, 0.55) !important;
+    color: #2C1A10 !important;
+}
 div[data-testid="stDialog"] button[kind="secondary"] p,
-div[data-testid="stDialog"] button[data-testid="baseButton-secondary"] {
-    color: #F8E6D2 !important;
-}
-div[data-testid="stDialog"] div[data-testid="stHorizontalBlock"]:first-of-type button {
-    background: rgba(248, 230, 210, 0.1) !important;
-    border: 1px solid rgba(248, 230, 210, 0.22) !important;
-    color: #F8E6D2 !important;
-    border-radius: 999px !important;
-    font-size: 1.15rem !important;
-    font-weight: 500 !important;
-    min-height: 40px !important;
-}
-/* One smooth scroll surface — no nested iframe scrolling. */
-div[data-testid="stDialog"] [data-testid="stVerticalBlock"] {
-    max-height: min(88vh, 900px) !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    -webkit-overflow-scrolling: touch !important;
-    overscroll-behavior: contain;
-    scroll-behavior: smooth;
+div[data-testid="stDialog"] button[kind="secondary"] span,
+div[data-testid="stDialog"] button[data-testid="baseButton-secondary"] p,
+div[data-testid="stDialog"] button[data-testid="baseButton-secondary"] span,
+div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] p,
+div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] span,
+div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] button p,
+div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] button span {
+    color: #2C1A10 !important;
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
     margin: 0 !important;
@@ -819,15 +784,13 @@ div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
     max-width: 100% !important;
     border: none !important;
     background: #2C1A10 !important;
-    /* Prevent the iframe from becoming a second scroll trap */
-    pointer-events: auto;
 }
 .preview-body-card {
     background:
         linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
     border-radius: 0 0 18px 18px;
-    padding: 1rem 1.05rem 1.25rem;
-    margin: 0 0 0.35rem;
+    padding: 0.85rem 1rem 1.05rem;
+    margin: 0;
     color: #F8E6D2;
 }
 .preview-body-card .preview-name {
