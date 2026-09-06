@@ -141,7 +141,7 @@ def render_onboarding() -> None:
     step = int(st.session_state.get(ONBOARDING_STEP_KEY, 0))
 
     if step <= 0:
-        mark = wordmark_path(variant="dark")
+        mark = wordmark_path()
         left, mid, right = st.columns([1, 3.2, 1])
         with mid:
             if mark is not None:

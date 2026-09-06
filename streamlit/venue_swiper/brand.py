@@ -7,36 +7,20 @@ from functools import lru_cache
 from pathlib import Path
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
-_WORDMARK = _ASSETS / "apres_wordmark_dark.png"
-_WORDMARK_SM = _ASSETS / "apres_wordmark_dark_sm.png"
-# Kept as fallback if dark assets are missing.
-_WORDMARK_LIGHT = _ASSETS / "apres_wordmark_light.png"
-_WORDMARK_LIGHT_SM = _ASSETS / "apres_wordmark_light_sm.png"
+_WORDMARK = _ASSETS / "apres_wordmark.png"
+_WORDMARK_SM = _ASSETS / "apres_wordmark_sm.png"
 
 
-def wordmark_path(*, variant: str = "dark") -> Path | None:
-    """Filesystem path for st.image (avoids huge base64 in the DOM).
-
-    Prefer the dark metallic mark everywhere on cream UI.
-    """
-    mapping = {
-        "dark": _WORDMARK,
-        "dark_sm": _WORDMARK_SM,
-        "hero": _WORDMARK,
-        "header": _WORDMARK_SM,
-        "light": _WORDMARK_LIGHT,
-        "light_sm": _WORDMARK_LIGHT_SM,
-    }
-    path = mapping.get(variant, _WORDMARK)
-    if path is not None and path.is_file():
-        return path
-    for fallback in (_WORDMARK, _WORDMARK_SM, _WORDMARK_LIGHT, _WORDMARK_LIGHT_SM):
-        if fallback.is_file():
-            return fallback
-    return None
+def wordmark_path(*, variant: str = "default") -> Path | None:
+    """Filesystem path for st.image — dark metallic mark only."""
+    if variant in ("sm", "header", "dark_sm"):
+        path = _WORDMARK_SM if _WORDMARK_SM.is_file() else _WORDMARK
+    else:
+        path = _WORDMARK if _WORDMARK.is_file() else _WORDMARK_SM
+    return path if path is not None and path.is_file() else None
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=4)
 def _data_uri(path: str, mime: str) -> str | None:
     p = Path(path)
     if not p.is_file():
@@ -47,13 +31,8 @@ def _data_uri(path: str, mime: str) -> str | None:
 
 def brand_mark_html(*, size: str = "header") -> str:
     """HTML for the Après wordmark — dark metallic on cream."""
-    if size == "hero":
-        path = wordmark_path(variant="dark")
-        cls = "apres-brand-hero"
-    else:
-        path = wordmark_path(variant="dark_sm")
-        cls = "apres-brand-header"
-
+    path = wordmark_path(variant="sm" if size != "hero" else "default")
+    cls = "apres-brand-hero" if size == "hero" else "apres-brand-header"
     uri = _data_uri(str(path), "image/png") if path else None
     if uri:
         return f'<img class="{cls}" src="{uri}" alt="Après" />'
