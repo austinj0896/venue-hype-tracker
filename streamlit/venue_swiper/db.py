@@ -147,7 +147,7 @@ def clear_db_caches() -> None:
 
 def _get_postgres_conn():
     import socket
-    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+    from urllib.parse import urlparse
 
     import psycopg2
     from psycopg2.extras import RealDictCursor
