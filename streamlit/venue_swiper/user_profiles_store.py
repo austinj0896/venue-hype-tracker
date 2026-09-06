@@ -238,14 +238,16 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
             created_at,
             updated_at
         from {table}
-        where user_email = %s
+        where lower(user_email) = lower(%s)
         limit 1
     """
     email_n = email.strip().lower()
     try:
         rows = run_query(sql, [email_n])
     except Exception:
-        return None
+        # Don't swallow DB errors as "no profile" — that sends returning users
+        # through setup again when Neon/pooler flaps.
+        raise
     row = normalize_profile_row(rows[0] if rows else None)
     if row and not include_photo:
         row["PROFILE_PHOTO_B64"] = None
