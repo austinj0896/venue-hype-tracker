@@ -87,9 +87,26 @@ BARISH_TYPES = {
     "beer_garden",
 }
 
+TAXONOMY_GROUPS: list[tuple[str, list[str]]] = [
+    ("restaurant_bar_vibes", RESTAURANT_BAR_VIBES),
+    ("bar_specific", BAR_SPECIFIC_VIBES),
+    ("general", GENERAL_TAGS),
+]
+
 
 def all_tags() -> list[str]:
     return [*RESTAURANT_BAR_VIBES, *BAR_SPECIFIC_VIBES, *GENERAL_TAGS]
+
+
+def taxonomy_rows() -> list[dict[str, str | int]]:
+    """Flat rows for syncing into Neon vibe_taxonomy."""
+    rows: list[dict[str, str | int]] = []
+    sort_order = 0
+    for category, tags in TAXONOMY_GROUPS:
+        for tag in tags:
+            rows.append({"tag": tag, "category": category, "sort_order": sort_order})
+            sort_order += 1
+    return rows
 
 
 def allowed_tags_for_type(primary_type: str | None) -> list[str]:

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Tag venues with local Ollama: website first, then web reviews for low confidence.
 
-Pass 1 — classify from Google place fields + website scrape.
-Pass 2 — only when needed: DuckDuckGo/Yelp/Maps review text (no Places API)
-          to confirm low-confidence tags and fill gaps.
+Pass 1 — classify from Google place fields + multi-page website scrape
+          (homepage + About/Menu/Story when linked).
+Pass 2 — only when needed: DuckDuckGo/Yelp/TripAdvisor review bodies
+          (no Places API) to confirm low-confidence tags and fill gaps.
 
 Examples:
   python scripts/tag_venue_vibes.py
@@ -35,7 +36,7 @@ except ImportError:
     load_dotenv = None  # type: ignore[misc, assignment]
 
 from review_scrape import fetch_web_reviews, needs_review_fallback
-from vibe_taxonomy import allowed_tags_for_type, taxonomy_prompt_block
+from vibe_taxonomy import allowed_tags_for_type, taxonomy_prompt_block, taxonomy_rows
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen2.5:7b"
@@ -43,10 +44,23 @@ DEFAULT_MODEL = "qwen2.5:7b"
 HIGH_CONFIDENCE = 0.75
 # Final tags below this are dropped after merge.
 MIN_ACCEPT = 0.65
-MAX_WEBSITE_CHARS = 3500
+MAX_WEBSITE_CHARS = 4500
+MAX_SECONDARY_PAGES = 3
+MAX_SECONDARY_CHARS = 1800
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+# Prefer these paths for vibe/menu signal beyond the homepage.
+_SECONDARY_LINK_RE = re.compile(
+    r"(?i)\b("
+    r"about|our[-_\s]?story|story|menu|food|drink|cocktail|wine|beer|"
+    r"private|experience|vibe|philosophy|chef|concept|reservations?"
+    r")\b"
+)
+_SKIP_LINK_RE = re.compile(
+    r"(?i)(careers?|jobs?|privacy|terms|login|cart|checkout|instagram|"
+    r"facebook|twitter|tiktok|mailto:|tel:|javascript:|#$)"
 )
 
 
@@ -79,6 +93,38 @@ def apply_schema(conn) -> None:
     print(f"Applied schema from {schema_path}")
 
 
+def sync_taxonomy(conn) -> int:
+    """Upsert the canonical tag list into vibe_taxonomy; deactivate removed tags."""
+    rows = taxonomy_rows()
+    active_tags = [str(row["tag"]) for row in rows]
+    with conn.cursor() as cur:
+        for row in rows:
+            cur.execute(
+                """
+                INSERT INTO vibe_taxonomy (tag, category, sort_order, is_active, updated_at)
+                VALUES (%s, %s, %s, TRUE, NOW())
+                ON CONFLICT (tag) DO UPDATE SET
+                    category = EXCLUDED.category,
+                    sort_order = EXCLUDED.sort_order,
+                    is_active = TRUE,
+                    updated_at = NOW()
+                """,
+                (row["tag"], row["category"], row["sort_order"]),
+            )
+        if active_tags:
+            cur.execute(
+                """
+                UPDATE vibe_taxonomy
+                SET is_active = FALSE, updated_at = NOW()
+                WHERE tag <> ALL(%s)
+                """,
+                (active_tags,),
+            )
+    conn.commit()
+    print(f"Synced {len(rows)} active tag(s) into vibe_taxonomy")
+    return len(rows)
+
+
 def fetch_places(
     conn,
     *,
@@ -87,6 +133,7 @@ def fetch_places(
     borough: str | None,
     limit: int,
     require_website: bool,
+    skip_tagged: bool,
 ) -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -102,6 +149,15 @@ def fetch_places(
         params.append(borough)
     if require_website:
         clauses.append("website_uri IS NOT NULL AND trim(website_uri) <> ''")
+    if skip_tagged:
+        clauses.append(
+            """
+            NOT EXISTS (
+                SELECT 1 FROM venue_tags t
+                WHERE t.google_place_id = places.google_place_id
+            )
+            """
+        )
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
@@ -110,7 +166,7 @@ def fetch_places(
                short_formatted_address
         FROM places
         {where}
-        ORDER BY random()
+        ORDER BY place_name
         LIMIT %s
     """
     params.append(limit)
@@ -131,17 +187,73 @@ def clean_html_text(html: str) -> str:
     return "\n".join(lines)
 
 
-def scrape_website(url: str, timeout: float = 20.0) -> dict[str, Any]:
-    import requests
+def _same_site(base_url: str, candidate: str) -> bool:
+    from urllib.parse import urlparse
 
-    if not url or not url.strip():
-        return {
-            "status": "no_website",
-            "text": "",
-            "error": None,
-            "final_url": None,
-            "content_hash": None,
-        }
+    try:
+        b = urlparse(base_url)
+        c = urlparse(candidate)
+    except Exception:  # noqa: BLE001
+        return False
+    if not c.scheme.startswith("http"):
+        return False
+    return (c.netloc or "").lower() == (b.netloc or "").lower()
+
+
+def _score_secondary_link(href: str, anchor: str) -> float:
+    blob = f"{href} {anchor}".lower()
+    if _SKIP_LINK_RE.search(blob):
+        return -1.0
+    if not _SECONDARY_LINK_RE.search(blob):
+        return -1.0
+    score = 1.0
+    for token, weight in (
+        ("about", 3.0),
+        ("story", 3.0),
+        ("menu", 2.5),
+        ("cocktail", 2.0),
+        ("wine", 2.0),
+        ("beer", 1.5),
+        ("private", 1.5),
+        ("experience", 1.5),
+        ("chef", 1.2),
+        ("concept", 1.2),
+    ):
+        if token in blob:
+            score += weight
+    return score
+
+
+def discover_secondary_urls(html: str, base_url: str) -> list[str]:
+    """Find About / Menu / Story pages on the same site."""
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin, urldefrag
+
+    soup = BeautifulSoup(html, "html.parser")
+    scored: list[tuple[float, str]] = []
+    seen: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        absolute = urljoin(base_url, href)
+        absolute, _ = urldefrag(absolute)
+        if absolute in seen or not _same_site(base_url, absolute):
+            continue
+        if absolute.rstrip("/") == base_url.rstrip("/"):
+            continue
+        anchor = a.get_text(" ", strip=True) or ""
+        score = _score_secondary_link(absolute, anchor)
+        if score < 0:
+            continue
+        seen.add(absolute)
+        scored.append((score, absolute))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [url for _, url in scored[:MAX_SECONDARY_PAGES]]
+
+
+def _fetch_html(url: str, timeout: float = 20.0) -> dict[str, Any]:
+    import requests
 
     try:
         resp = requests.get(
@@ -151,71 +263,209 @@ def scrape_website(url: str, timeout: float = 20.0) -> dict[str, Any]:
             allow_redirects=True,
         )
     except requests.RequestException as exc:
-        return {
-            "status": "error",
-            "text": "",
-            "error": str(exc),
-            "final_url": url,
-            "content_hash": None,
-        }
+        return {"ok": False, "error": str(exc), "html": "", "final_url": url, "status_code": None}
 
     if resp.status_code in (401, 403, 429):
         return {
-            "status": "blocked",
-            "text": "",
+            "ok": False,
             "error": f"HTTP {resp.status_code}",
+            "html": "",
             "final_url": resp.url,
-            "content_hash": None,
+            "status_code": resp.status_code,
+            "blocked": True,
         }
     if resp.status_code >= 400:
         return {
-            "status": "error",
-            "text": "",
+            "ok": False,
             "error": f"HTTP {resp.status_code}",
+            "html": "",
             "final_url": resp.url,
-            "content_hash": None,
+            "status_code": resp.status_code,
         }
 
     ctype = (resp.headers.get("Content-Type") or "").lower()
     if "html" not in ctype and "text" not in ctype and ctype:
         return {
-            "status": "empty",
-            "text": "",
+            "ok": False,
             "error": f"Unsupported content-type: {ctype}",
+            "html": "",
             "final_url": resp.url,
+            "status_code": resp.status_code,
+        }
+    return {
+        "ok": True,
+        "error": None,
+        "html": resp.text,
+        "final_url": resp.url,
+        "status_code": resp.status_code,
+    }
+
+
+def _prefer_vibe_excerpt(text: str, limit: int) -> str:
+    """Keep vibe-relevant lines when truncating long pages."""
+    if len(text) <= limit:
+        return text
+    lines = text.splitlines()
+    keywords = (
+        "atmosphere",
+        "vibe",
+        "ambiance",
+        "about",
+        "story",
+        "menu",
+        "cocktail",
+        "wine",
+        "beer",
+        "date",
+        "romantic",
+        "outdoor",
+        "patio",
+        "rooftop",
+        "private",
+        "experience",
+        "farm",
+        "chef",
+        "music",
+        "sports",
+        "dive",
+        "casual",
+        "intimate",
+    )
+    scored: list[tuple[float, int, str]] = []
+    for idx, line in enumerate(lines):
+        low = line.lower()
+        hits = sum(1 for k in keywords if k in low)
+        if not hits:
+            continue
+        score = float(hits) * 2.0 + min(len(line) / 400.0, 1.0)
+        scored.append((score, idx, line))
+    if not scored:
+        return text[:limit]
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    chosen_idx: set[int] = set()
+    size = 0
+    for _, idx, line in scored:
+        if size + len(line) + 1 > limit:
+            continue
+        chosen_idx.add(idx)
+        size += len(line) + 1
+        if size >= limit:
+            break
+    ordered = [lines[i] for i in sorted(chosen_idx)]
+    out = "\n".join(ordered)
+    # Pad with page lead-in when vibe lines are sparse (after the signal).
+    if len(out) < max(limit // 3, 200):
+        remaining = limit - len(out) - 10
+        head = text[: max(remaining, 0)]
+        out = f"{out}\n...\n{head}" if head else out
+    return out[:limit]
+
+
+def scrape_website(url: str, timeout: float = 20.0) -> dict[str, Any]:
+    if not url or not url.strip():
+        return {
+            "status": "no_website",
+            "text": "",
+            "error": None,
+            "final_url": None,
             "content_hash": None,
+            "pages_fetched": [],
         }
 
-    text = clean_html_text(resp.text)
-    if len(text) < 40:
+    home = _fetch_html(url, timeout=timeout)
+    if not home.get("ok"):
+        status = "blocked" if home.get("blocked") else "error"
+        return {
+            "status": status,
+            "text": "",
+            "error": home.get("error"),
+            "final_url": home.get("final_url") or url,
+            "content_hash": None,
+            "pages_fetched": [],
+        }
+
+    final_url = home["final_url"] or url
+    home_text = clean_html_text(home["html"])
+    if len(home_text) < 40:
         return {
             "status": "empty",
-            "text": text,
+            "text": home_text,
             "error": "Extracted text too short",
-            "final_url": resp.url,
-            "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None,
+            "final_url": final_url,
+            "content_hash": hashlib.sha256(home_text.encode("utf-8")).hexdigest()
+            if home_text
+            else None,
+            "pages_fetched": [final_url],
         }
 
-    truncated = text[:MAX_WEBSITE_CHARS]
+    parts = [f"[Homepage]\n{_prefer_vibe_excerpt(home_text, MAX_WEBSITE_CHARS)}"]
+    pages_fetched = [final_url]
+    secondary_urls = discover_secondary_urls(home["html"], final_url)
+    for sec_url in secondary_urls:
+        page = _fetch_html(sec_url, timeout=timeout)
+        if not page.get("ok"):
+            continue
+        page_text = clean_html_text(page["html"])
+        if len(page_text) < 60:
+            continue
+        label = sec_url.rstrip("/").rsplit("/", 1)[-1] or "page"
+        excerpt = _prefer_vibe_excerpt(page_text, MAX_SECONDARY_CHARS)
+        parts.append(f"[{label}]\n{excerpt}")
+        pages_fetched.append(page.get("final_url") or sec_url)
+        time.sleep(0.4)
+
+    combined = "\n\n".join(parts)
+    truncated = combined[: MAX_WEBSITE_CHARS + MAX_SECONDARY_CHARS * MAX_SECONDARY_PAGES]
     return {
         "status": "ok",
         "text": truncated,
         "error": None,
-        "final_url": resp.url,
+        "final_url": final_url,
         "content_hash": hashlib.sha256(truncated.encode("utf-8")).hexdigest(),
+        "pages_fetched": pages_fetched,
+    }
+
+
+def build_google_facts(place: dict[str, Any]) -> dict[str, Any]:
+    """Structured place fields the LLM can treat as soft, non-review signals."""
+    primary = (place.get("primary_type") or "").strip()
+    category = (place.get("venue_category") or "").strip()
+    price = place.get("price_level")
+    inferred: list[str] = []
+    low_type = primary.lower()
+    if low_type in {"sports_bar"} or "sport" in low_type:
+        inferred.append("Google type suggests sports-oriented bar")
+    if low_type in {"wine_bar"} or "wine" in low_type:
+        inferred.append("Google type suggests wine-focused venue")
+    if low_type in {"cocktail_bar"} or "cocktail" in low_type:
+        inferred.append("Google type suggests cocktail-focused bar")
+    if low_type in {"night_club", "nightclub"} or "club" in low_type:
+        inferred.append("Google type suggests nightlife / dancing potential")
+    if low_type in {"cafe", "coffee_shop", "bakery"}:
+        inferred.append("Google type suggests cafe/bakery (often quieter / daytime)")
+    if category:
+        inferred.append(f"Venue category: {category}")
+    if price:
+        inferred.append(f"Price level: {price}")
+
+    return {
+        "primary_type": primary or None,
+        "venue_category": category or None,
+        "price_level": price,
+        "borough": place.get("borough"),
+        "address": place.get("short_formatted_address") or place.get("formatted_address"),
+        "inferred_signals": inferred,
     }
 
 
 def build_base_context(place: dict[str, Any], scrape: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": place.get("place_name"),
-        "primary_type": place.get("primary_type"),
-        "venue_category": place.get("venue_category"),
-        "price_level": place.get("price_level"),
-        "borough": place.get("borough"),
-        "address": place.get("short_formatted_address") or place.get("formatted_address"),
         "website_uri": place.get("website_uri"),
         "scrape_status": scrape.get("status"),
+        "pages_fetched": scrape.get("pages_fetched") or [],
+        "google_facts": build_google_facts(place),
         "website_excerpt": scrape.get("text") or "",
     }
 
@@ -232,6 +482,8 @@ Rules:
 - Put a honest confidence 0.0–1.0 on every tag you include.
 - If evidence is weak, still include the tag with LOW confidence (e.g. 0.4–0.7) rather than omitting it — we will confirm weak tags later with reviews.
 - Never invent Michelin / BYOB / Cigs inside / Cash only / Dress code without clear evidence.
+- Treat google_facts.inferred_signals as soft hints only; still require website language for high confidence.
+- Evidence must quote or paraphrase website/menu/about text — never use the venue name alone.
 - Also list tags you considered but could not support in "unsure".
 - Return valid JSON only:
 {{
@@ -257,7 +509,7 @@ def build_review_prompt(
     reviews_text: str,
 ) -> str:
     locked_names = [t["tag"] for t in locked_tags]
-    return f"""You refine vibe tags for Après using customer review text from the web (Yelp/Google search snippets and pages).
+    return f"""You refine vibe tags for Après using customer review text from the web (Yelp/TripAdvisor/Google).
 
 This is PASS 2 — website-only tagging already finished.
 LOCKED tags (already high-confidence from the website; do not remove them):
@@ -270,10 +522,12 @@ You may also ADD new tags from the Allowed list when reviews clearly support the
 
 Rules:
 - Use ONLY Allowed tags.
-- Prefer quotes from the review text as evidence.
+- Prefer quotes from "Customer review excerpts" over search snippets.
+- NEVER use page titles, star ratings alone, or the venue name as evidence.
 - If reviews do not clearly support a candidate, OMIT it — accuracy over coverage.
 - Do not keep a weak website guess just because it was a candidate.
 - Do not contradict locked tags unless reviews overwhelmingly disagree — if so, put them in "contradicted".
+- google_facts are context only; reviews must still support subjective vibes.
 - Return valid JSON only:
 {{
   "tags": [{{"tag": "...", "confidence": 0.0}}],
@@ -286,7 +540,7 @@ Allowed tags:
 {taxonomy_prompt_block(allowed)}
 
 Venue metadata + website (context only):
-{json.dumps(context, indent=2)}
+{json.dumps({k: v for k, v in context.items() if k != "website_excerpt"}, indent=2)}
 
 Web review text:
 {reviews_text}
@@ -652,6 +906,9 @@ def print_result(
         f"website scrape: {scrape.get('status')}"
         + (f" ({scrape.get('error')})" if scrape.get("error") else "")
     )
+    pages = scrape.get("pages_fetched") or []
+    if pages:
+        print(f"pages fetched ({len(pages)}): {', '.join(pages[:4])}" + (" ..." if len(pages) > 4 else ""))
     if scrape.get("text"):
         preview = scrape["text"][:200].replace("\n", " ")
         print(f"website excerpt: {preview}...")
@@ -662,7 +919,12 @@ def print_result(
     if review_ran:
         status = (reviews or {}).get("status")
         sources = ",".join((reviews or {}).get("sources") or []) or "none"
-        print(f"\nPass 2 — web reviews: {status}  sources={sources}")
+        n_reviews = (reviews or {}).get("review_excerpt_count")
+        n_snips = (reviews or {}).get("snippet_count")
+        counts = ""
+        if n_reviews is not None or n_snips is not None:
+            counts = f"  review_bodies={n_reviews or 0} snippets={n_snips or 0}"
+        print(f"\nPass 2 — web reviews: {status}  sources={sources}{counts}")
         if (reviews or {}).get("text"):
             preview = (reviews or {})["text"][:220].replace("\n", " ")
             print(f"reviews excerpt: {preview}...")
@@ -711,12 +973,22 @@ def parse_args() -> argparse.Namespace:
         description="Tag Après venues with Ollama (website first, reviews for low confidence)"
     )
     p.add_argument("--database-url", default=None, help="Neon connection string override")
-    p.add_argument("--apply-schema", action="store_true", help="Create/update venue_scrapes / venue_tags")
+    p.add_argument("--apply-schema", action="store_true", help="Create/update venue_scrapes / venue_tags / vibe_taxonomy")
+    p.add_argument(
+        "--sync-taxonomy",
+        action="store_true",
+        help="Upsert the full tag list from vibe_taxonomy.py into Neon vibe_taxonomy",
+    )
     p.add_argument("--name", default=None, help="Substring match on place_name")
     p.add_argument("--place-id", default=None, help="Exact google_place_id")
     p.add_argument("--borough", default=None, help="Filter by borough")
     p.add_argument("--limit", type=int, default=1, help="How many venues to tag (default 1)")
     p.add_argument("--allow-no-website", action="store_true", help="Tag even without website_uri")
+    p.add_argument(
+        "--skip-tagged",
+        action="store_true",
+        help="Skip venues that already have at least one row in venue_tags (resume-friendly)",
+    )
     p.add_argument("--save", action="store_true", help="Write scrape + tags to Neon")
     p.add_argument("--model", default=os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL))
     p.add_argument("--ollama-url", default=os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_URL))
@@ -888,6 +1160,16 @@ def tag_one_venue(
     return final_tags, rejects, scrape, reviews
 
 
+def reconnect(db_url: str, old_conn=None):
+    """Open a fresh Neon connection; close the old one if it died mid-batch."""
+    if old_conn is not None:
+        try:
+            old_conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return connect(db_url)
+
+
 def main() -> None:
     args = parse_args()
     db_url = load_database_url(args.database_url)
@@ -896,8 +1178,21 @@ def main() -> None:
     try:
         if args.apply_schema:
             apply_schema(conn)
-            if args.limit <= 0 and not args.name and not args.place_id:
-                return
+            sync_taxonomy(conn)
+        elif args.sync_taxonomy:
+            sync_taxonomy(conn)
+
+        # Schema/taxonomy maintenance only — skip tagging unless a venue filter/save was requested.
+        if (args.apply_schema or args.sync_taxonomy) and not (
+            args.name
+            or args.place_id
+            or args.borough
+            or args.skip_tagged
+            or args.save
+            or args.dry_run_prompt
+            or args.allow_no_website
+        ):
+            return
 
         check_ollama(args.ollama_url, args.model)
 
@@ -908,47 +1203,69 @@ def main() -> None:
             borough=args.borough,
             limit=max(1, args.limit),
             require_website=not args.allow_no_website,
+            skip_tagged=args.skip_tagged,
         )
         if not places:
             raise SystemExit(
-                "No matching places found (try --allow-no-website or a different --name)."
+                "No matching places found "
+                "(try --allow-no-website, drop --skip-tagged, or a different --name)."
             )
 
         print(
             f"Tagging {len(places)} venue(s) with model={args.model} "
-            f"(high≥{args.high_confidence}, accept≥{args.min_confidence})"
+            f"(high≥{args.high_confidence}, accept≥{args.min_confidence}"
+            f"{', skip-tagged' if args.skip_tagged else ''})"
         )
         for i, place in enumerate(places):
             if i:
                 time.sleep(1.0)
             print(f"\n[{i + 1}/{len(places)}] {place.get('place_name')}")
-            tags, rejects, scrape, reviews = tag_one_venue(
-                place,
-                model=args.model,
-                ollama_url=args.ollama_url,
-                high_threshold=args.high_confidence,
-                min_accept=args.min_confidence,
-                force_reviews=args.force_reviews,
-                no_reviews=args.no_reviews,
-                dry_run_prompt=args.dry_run_prompt,
-            )
+            try:
+                tags, rejects, scrape, reviews = tag_one_venue(
+                    place,
+                    model=args.model,
+                    ollama_url=args.ollama_url,
+                    high_threshold=args.high_confidence,
+                    min_accept=args.min_confidence,
+                    force_reviews=args.force_reviews,
+                    no_reviews=args.no_reviews,
+                    dry_run_prompt=args.dry_run_prompt,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"  ! tagging failed, skipping: {exc}")
+                continue
             if args.dry_run_prompt:
                 continue
             if args.save:
-                upsert_scrape(conn, place, scrape, reviews)
-                upsert_tags(
-                    conn,
-                    place["google_place_id"],
-                    tags,
-                    rejects,
-                    model=args.model,
-                )
+                try:
+                    upsert_scrape(conn, place, scrape, reviews)
+                    upsert_tags(
+                        conn,
+                        place["google_place_id"],
+                        tags,
+                        rejects,
+                        model=args.model,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  ! DB write failed ({exc}); reconnecting and retrying once…")
+                    conn = reconnect(db_url, conn)
+                    upsert_scrape(conn, place, scrape, reviews)
+                    upsert_tags(
+                        conn,
+                        place["google_place_id"],
+                        tags,
+                        rejects,
+                        model=args.model,
+                    )
                 print(
                     f"Saved {len(tags)} accepted tag(s), "
                     f"{len(rejects)} rejected candidate(s) for {place['place_name']}"
                 )
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":

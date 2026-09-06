@@ -192,6 +192,7 @@ def parse_schedule_from_text(text: str) -> dict[str, Any] | None:
         return None
 
     lines: list[str] = []
+    known = 0
     for day in _DAYS:
         label = day.capitalize()
         val = hours[day]
@@ -200,6 +201,7 @@ def parse_schedule_from_text(text: str) -> dict[str, Any] | None:
         elif val == []:
             hours[day] = None  # store null for closed in JSON; text says Closed
             lines.append(f"{label}: Closed")
+            known += 1
         else:
             o, c = val[0]["open"], val[0]["close"]
 
@@ -210,20 +212,30 @@ def parse_schedule_from_text(text: str) -> dict[str, Any] | None:
                 return f"{h12}:{m:02d} {ampm}"
 
             lines.append(f"{label}: {fmt(o)} – {fmt(c)}")
+            known += 1
+
+    # Incomplete weeks are partial and lower-confidence — don't beat a full Yelp week.
+    if known >= 6:
+        status, confidence = "ok", min(0.98, 0.72 + 0.04 * known)
+    elif known >= 4:
+        status, confidence = "partial", 0.55 + 0.05 * known
+    else:
+        status, confidence = "partial", 0.35 + 0.05 * known
 
     return {
-        "status": "ok",
-        "confidence": 0.9,
+        "status": status,
+        "confidence": round(confidence, 3),
         "timezone": "America/Los_Angeles",
-        "notes": "Parsed from search/website schedule snippet",
+        "notes": f"Parsed schedule ({known}/7 days known)",
         "source_preference": "google_search",
         "evidence": text[:280],
         "hours": hours,
         "hours_text": "\n".join(lines),
+        "known_days": known,
     }
 
 
-def snippet_schedule_score(text: str) -> float:
+def snippet_schedule_score(text: str, *, url: str = "") -> float:
     if not text:
         return -1.0
     if "RuntimeError" in text or "search error" in text.lower():
@@ -238,17 +250,12 @@ def snippet_schedule_score(text: str) -> float:
         score += 1.5
     if _FALSE_HOURS_RE.search(text) and not looks_like_weekly_schedule(text):
         score -= 3.0
+    # Yelp pages almost always carry the weekly schedule — boost hard.
+    if url and "yelp.com" in urlparse(url).netloc.lower():
+        score += 6.0
+        if "/biz/" in url:
+            score += 2.0
     return score
-    if explicit:
-        return explicit
-    if load_dotenv:
-        load_dotenv(ROOT / ".env")
-    url = os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")
-    if not url:
-        raise SystemExit(
-            "Set DATABASE_URL (Neon pooled connection string) or pass --database-url"
-        )
-    return url
 
 
 def load_database_url(explicit: str | None) -> str:
@@ -562,24 +569,277 @@ def _ddg_text(query: str, *, max_results: int = 8) -> list[dict[str, str]]:
     return out
 
 
+def _street_address(place: dict[str, Any]) -> str:
+    """Prefer street-level address for Yelp matching."""
+    short = (place.get("short_formatted_address") or "").strip()
+    full = (place.get("formatted_address") or "").strip()
+    raw = short or full
+    if not raw:
+        return ""
+    # Keep "3216 Manhattan Ave" style — drop trailing city/state if present.
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if parts:
+        return parts[0]
+    return raw
+
+
+def _is_yelp_biz_url(url: str) -> bool:
+    if not url:
+        return False
+    host = urlparse(url).netloc.lower()
+    path = urlparse(url).path.lower()
+    return "yelp.com" in host and "/biz/" in path
+
+
+def _normalize_yelp_biz_url(url: str) -> str:
+    """Strip query/fragment and review pagination so we hit the main biz page."""
+    try:
+        p = urlparse(url)
+    except Exception:  # noqa: BLE001
+        return url
+    path = p.path.split("?")[0]
+    # Drop /biz/name/reviews etc.
+    m = re.match(r"(?i)(/biz/[^/]+)", path)
+    if m:
+        path = m.group(1)
+    return f"https://www.yelp.com{path}"
+
+
+def _name_tokens(text: str) -> set[str]:
+    raw = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+    stop = {
+        "the",
+        "a",
+        "an",
+        "and",
+        "of",
+        "at",
+        "by",
+        "for",
+        "cafe",
+        "café",
+        "coffee",
+        "restaurant",
+        "bar",
+        "grill",
+        "kitchen",
+        "bistro",
+        "shop",
+        "store",
+        "inc",
+        "llc",
+    }
+    return {t for t in raw.split() if len(t) > 1 and t not in stop}
+
+
+def _yelp_slug_tokens(url: str) -> set[str]:
+    path = urlparse(url).path.lower()
+    m = re.search(r"/biz/([^/?#]+)", path)
+    if not m:
+        return set()
+    slug = re.sub(r"-\d+$", "", m.group(1))
+    return _name_tokens(slug.replace("-", " "))
+
+
+def score_yelp_match(
+    place_name: str,
+    url: str,
+    *,
+    title: str = "",
+    snippet: str = "",
+    street: str = "",
+) -> float:
+    """How likely this Yelp /biz/ URL is the venue (not a random MB neighbor)."""
+    name_toks = _name_tokens(place_name)
+    if not name_toks or not _is_yelp_biz_url(url):
+        return -100.0
+
+    # Location words are shared by half the neighborhood — don't let them "match".
+    loc_noise = {
+        "manhattan",
+        "beach",
+        "hermosa",
+        "redondo",
+        "el",
+        "segundo",
+        "california",
+        "los",
+        "angeles",
+        "ca",
+    }
+    core = name_toks - loc_noise
+    if not core:
+        core = name_toks
+
+    slug_toks = _yelp_slug_tokens(url) - loc_noise
+    title_toks = _name_tokens(title) - loc_noise
+    blob = f"{url} {title} {snippet}".lower()
+
+    slug_hit = len(core & slug_toks) / len(core)
+    title_hit = (len(core & title_toks) / len(core)) if title_toks else 0.0
+    score = max(slug_hit, title_hit) * 10.0
+
+    # Strong bonus when distinctive tokens appear in the slug.
+    for tok in sorted(core, key=len, reverse=True)[:3]:
+        if tok in url.lower().replace("-", ""):
+            score += 1.5
+        if tok in (title or "").lower():
+            score += 0.75
+
+    if street:
+        m = re.match(r"(\d+)", street)
+        if m and m.group(1) in blob:
+            score += 2.0
+
+    # Hard reject obvious wrong verticals / unrelated professions.
+    if re.search(
+        r"(?i)(atty|attorney|lawyer|law-office|dentist|chiroprac|insurance|"
+        r"real-estate|realtor|mortgage|plumbing|hvac)",
+        blob,
+    ):
+        score -= 25.0
+
+    return score
+
+
+def pick_best_yelp_url(
+    place: dict[str, Any],
+    results: list[dict[str, str]],
+) -> tuple[str | None, list[str], list[tuple[float, str]]]:
+    """Return best matching Yelp biz URL, all ranked matches, and scored list."""
+    name = (place.get("place_name") or "").strip()
+    street = _street_address(place)
+    scored: list[tuple[float, str]] = []
+    seen: set[str] = set()
+    for row in results:
+        url = (row.get("url") or "").strip()
+        if not _is_yelp_biz_url(url):
+            continue
+        norm = _normalize_yelp_biz_url(url)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        sc = score_yelp_match(
+            name,
+            norm,
+            title=row.get("title") or "",
+            snippet=row.get("snippet") or "",
+            street=street,
+        )
+        scored.append((sc, norm))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    # Require a real name overlap — never scrape the first random /biz/ hit.
+    good = [(s, u) for s, u in scored if s >= 4.0]
+    ranked_urls = [u for _, u in good]
+    best = ranked_urls[0] if ranked_urls else None
+    return best, ranked_urls, scored
+
+
+def scrape_yelp_hours(url: str) -> dict[str, Any]:
+    """Fetch a Yelp /biz/ page and extract hours text when possible."""
+    page = _fetch_html(url)
+    if not page.get("ok"):
+        return {
+            "ok": False,
+            "url": url,
+            "text": "",
+            "error": page.get("error"),
+        }
+    html = page.get("html") or ""
+    text = clean_html_text(html)
+    # Prefer hours-looking lines (Yelp often embeds Mon–Sun blocks).
+    excerpt = prefer_hours_excerpt(text, 3500)
+    # Also try JSON-LD opening hours.
+    ld_bits: list[str] = []
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
+            raw = (tag.string or tag.get_text() or "").strip()
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            nodes = data if isinstance(data, list) else [data]
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                hours = node.get("openingHours") or node.get("openingHoursSpecification")
+                if isinstance(hours, str):
+                    ld_bits.append(hours)
+                elif isinstance(hours, list):
+                    for h in hours:
+                        if isinstance(h, str):
+                            ld_bits.append(h)
+                        elif isinstance(h, dict):
+                            days = h.get("dayOfWeek")
+                            opens = h.get("opens")
+                            closes = h.get("closes")
+                            if days and opens and closes:
+                                if isinstance(days, list):
+                                    for d in days:
+                                        ld_bits.append(f"{d}: {opens} - {closes}")
+                                else:
+                                    ld_bits.append(f"{days}: {opens} - {closes}")
+    except Exception:  # noqa: BLE001
+        pass
+
+    combined = excerpt
+    if ld_bits:
+        combined = "Yelp JSON-LD hours:\n" + "\n".join(ld_bits) + "\n\n" + excerpt
+    return {
+        "ok": True,
+        "url": page.get("final_url") or url,
+        "text": combined[:5000],
+        "error": None,
+    }
+
+
 def search_google_hours(place: dict[str, Any]) -> dict[str, Any]:
-    """Search the open web (incl. Google result snippets) for hours."""
+    """Find hours via web search, aggressively targeting the first Yelp biz page."""
     name = (place.get("place_name") or "").strip()
     loc = _location_query(place)
+    street = _street_address(place)
+    borough = (place.get("borough") or "").strip()
     if not name:
-        return {"status": "empty", "text": "", "sources": [], "urls": [], "queries": []}
+        return {
+            "status": "empty",
+            "text": "",
+            "sources": [],
+            "urls": [],
+            "yelp_urls": [],
+            "queries": [],
+            "best_schedule_snippet": None,
+            "yelp_page_text": "",
+        }
 
+    # Yelp-first: name + address is the reliable path.
     queries = [
+        f'"{name}" {street} {borough} site:yelp.com/biz'.strip(),
+        f'"{name}" {street} site:yelp.com'.strip(),
+        f'"{name}" {loc} site:yelp.com/biz',
+        f'"{name}" {borough} yelp',
         f'"{name}" {loc} hours',
         f'"{name}" {loc} opening hours',
-        f'"{name}" {loc} open today',
-        f'"{name}" {loc} site:google.com hours',
     ]
+    # Drop empties / dupes while preserving order.
+    seen_q: set[str] = set()
+    clean_queries: list[str] = []
+    for q in queries:
+        q = re.sub(r"\s+", " ", q).strip()
+        if not q or q in seen_q:
+            continue
+        seen_q.add(q)
+        clean_queries.append(q)
+
     results: list[dict[str, str]] = []
     seen: set[str] = set()
-    for q in queries:
+    for q in clean_queries:
         try:
-            batch = _ddg_text(q, max_results=6)
+            batch = _ddg_text(q, max_results=8)
         except Exception as exc:  # noqa: BLE001
             results.append({"title": "[search error]", "url": "", "snippet": str(exc)})
             continue
@@ -589,9 +849,41 @@ def search_google_hours(place: dict[str, Any]) -> dict[str, Any]:
                 continue
             seen.add(key)
             results.append(row)
-        time.sleep(0.45)
+        time.sleep(0.35)
 
-    # Prefer snippets that look like hours schedules; rank best first.
+    yelp_urls: list[str] = []
+    best_yelp, ranked_yelp, yelp_scores = pick_best_yelp_url(place, results)
+    if ranked_yelp:
+        yelp_urls = ranked_yelp[:5]
+    elif yelp_scores:
+        # Keep unmatched for debugging but do not scrape them.
+        yelp_urls = []
+
+    # Scrape only the best name-matched Yelp biz page.
+    yelp_page_text = ""
+    yelp_page_url = ""
+    sources: list[str] = []
+    label = name[:40]
+    if best_yelp:
+        print(f"  → [{label}] yelp match: {best_yelp}")
+        yelp_page = scrape_yelp_hours(best_yelp)
+        if yelp_page.get("ok") and yelp_page.get("text"):
+            yelp_page_text = str(yelp_page["text"])
+            yelp_page_url = str(yelp_page.get("url") or best_yelp)
+            sources.append("yelp_page")
+        else:
+            print(
+                f"  → [{label}] yelp scrape failed "
+                f"({yelp_page.get('error')}); using snippets"
+            )
+        time.sleep(0.4)
+    elif results:
+        top = yelp_scores[:3] if yelp_scores else []
+        if top:
+            preview = ", ".join(f"{s:.1f}:{u.rsplit('/', 1)[-1]}" for s, u in top)
+            print(f"  → [{label}] no confident yelp match (top: {preview})")
+
+    # Prefer snippets that look like hours schedules; Yelp URLs ranked highest.
     scored: list[tuple[float, str, str]] = []
     for row in results:
         snippet = re.sub(r"\s+", " ", (row.get("snippet") or "").strip())
@@ -599,53 +891,88 @@ def search_google_hours(place: dict[str, Any]) -> dict[str, Any]:
         url = (row.get("url") or "").strip()
         if snippet.startswith("[search error]") or "RuntimeError" in snippet:
             continue
-        candidates = [c for c in (snippet, title) if c]
-        for cand in candidates:
+        for cand in (snippet, title):
+            if not cand:
+                continue
             if not _HOURS_LINE_RE.search(cand):
                 continue
-            # Body first — titles alone are weak unless they contain times.
             if cand is title and not re.search(r"(?i)\d{1,2}(:\d{2})?\s*(am|pm)", title):
                 continue
             if len(cand) < 25 and not looks_like_weekly_schedule(cand):
                 continue
-            scored.append((snippet_schedule_score(cand), cand, url))
+            scored.append((snippet_schedule_score(cand, url=url), cand, url))
+
+    if yelp_page_text and looks_like_weekly_schedule(yelp_page_text):
+        scored.append(
+            (
+                snippet_schedule_score(yelp_page_text, url=yelp_page_url or (yelp_urls[0] if yelp_urls else "")),
+                yelp_page_text[:1200],
+                yelp_page_url or (yelp_urls[0] if yelp_urls else ""),
+            )
+        )
 
     scored.sort(key=lambda x: (-x[0], -len(x[1])))
     deduped: list[str] = []
     urls: list[str] = []
     seen_l: set[str] = set()
     seen_u: set[str] = set()
+
+    # Always surface Yelp URLs first.
+    for yu in yelp_urls:
+        if yu not in seen_u:
+            seen_u.add(yu)
+            urls.append(yu)
+
+    best_yelp_snippet: str | None = None
+    best_schedule_snippet: str | None = None
     for score, line, url in scored:
-        key = line.lower()
+        key = line.lower()[:240]
         if key in seen_l:
             continue
         seen_l.add(key)
+        is_yelp = bool(url and "yelp.com" in urlparse(url).netloc.lower())
         prefix = "SCHEDULE: " if score >= 5 else ""
+        if is_yelp:
+            prefix = "YELP SCHEDULE: " if score >= 5 else "YELP: "
         deduped.append(prefix + line)
         if url and url not in seen_u:
             seen_u.add(url)
             urls.append(url)
+        if is_yelp and best_yelp_snippet is None and looks_like_weekly_schedule(line):
+            best_yelp_snippet = line
+        if best_schedule_snippet is None and score >= 5:
+            best_schedule_snippet = line
         if len(deduped) >= 14:
             break
 
-    text = ""
+    if yelp_page_text:
+        sources.append("duckduckgo_yelp_hours")
+    elif deduped:
+        sources.append("duckduckgo_google_hours")
+
+    text_parts: list[str] = []
+    if yelp_page_text:
+        text_parts.append(
+            "Yelp page hours (preferred source):\n" + yelp_page_text[:2500]
+        )
     if deduped:
-        text = (
-            "Search snippets (hours-related; lines marked SCHEDULE are strongest):\n"
+        text_parts.append(
+            "Search snippets (YELP/SCHEDULE lines are strongest):\n"
             + "\n".join(f"- {s}" for s in deduped)
         )
-    text = text[:MAX_SEARCH_CHARS]
+    text = "\n\n".join(text_parts)[:MAX_SEARCH_CHARS]
+
     return {
-        "status": "ok" if text.strip() else "empty",
+        "status": "ok" if text.strip() or yelp_urls else "empty",
         "text": text,
-        "sources": ["duckduckgo_google_hours"] if text else [],
-        "urls": urls[:8],
-        "queries": queries,
+        "sources": sorted(set(sources)) if sources else (["duckduckgo_google_hours"] if text else []),
+        "urls": urls[:10],
+        "yelp_urls": yelp_urls[:5],
+        "queries": clean_queries,
         "result_count": len(results),
-        "best_schedule_snippet": next(
-            (s[len("SCHEDULE: ") :] for s in deduped if s.startswith("SCHEDULE: ")),
-            None,
-        ),
+        "best_schedule_snippet": best_yelp_snippet or best_schedule_snippet,
+        "yelp_page_text": yelp_page_text,
+        "yelp_page_url": yelp_page_url,
     }
 
 
@@ -711,11 +1038,12 @@ def build_hours_prompt(
 
 Rules:
 - Score WEBSITE and SEARCH independently. Do NOT prefer website by default.
-- Pick the source with the clearest weekday schedule (Mon–Sun with open/close or Closed).
-- Lines marked SCHEDULE in SEARCH are highest-quality (often Yelp).
+- Prefer Yelp (lines marked YELP / YELP SCHEDULE / "Yelp page hours") when it has a full Mon–Sun schedule.
+- Pick the source with the MOST complete weekday schedule (fewest unknowns).
 - Do NOT invent hours. If a source has no schedule, that candidate status is "empty".
 - Never mark every day Closed unless the source explicitly says the business is closed all week.
 - "48 hours notice" / "happy hour" are NOT weekly hours.
+- A website with only 1–2 known days should lose to a Yelp week with 6–7 days.
 - Times must be 24-hour "HH:MM" in open/close fields.
 - Return JSON only:
 {{
@@ -803,6 +1131,30 @@ def _hours_text_from_value(hours_text: Any) -> str | None:
     return text or None
 
 
+def _count_known_days(hours_json: dict[str, Any] | None, hours_text: str | None) -> int:
+    known = 0
+    if isinstance(hours_json, dict):
+        for day in _DAYS:
+            val = hours_json.get(day)
+            if val is None:
+                continue
+            if val == [] or (isinstance(val, list) and val):
+                known += 1
+        if known:
+            return known
+    if hours_text:
+        for line in hours_text.splitlines():
+            low = line.lower()
+            if "(unknown)" in low:
+                continue
+            if ":" not in line:
+                continue
+            body = line.split(":", 1)[-1].strip()
+            if re.search(r"(?i)closed", body) or re.search(r"\d", body):
+                known += 1
+    return known
+
+
 def normalize_candidate(raw: dict[str, Any], *, default_source: str) -> dict[str, Any]:
     status = str(raw.get("status") or "empty").lower().strip()
     if status not in {"ok", "partial", "empty"}:
@@ -813,8 +1165,9 @@ def normalize_candidate(raw: dict[str, Any], *, default_source: str) -> dict[str
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
 
-    hours_out, any_open = _normalize_hours_dict(raw.get("hours"))
+    hours_out, any_open = _normalize_hours_dict(raw.get("hours") or raw.get("hours_json"))
     hours_text = _hours_text_from_value(raw.get("hours_text"))
+    known_days = int(raw.get("known_days") or 0) or _count_known_days(hours_out, hours_text)
     closed_only = (not any_open) and bool(
         hours_text and re.search(r"(?i)closed", hours_text)
     ) and not re.search(r"(?i)\d{1,2}(:\d{2})?\s*(am|pm)", hours_text or "")
@@ -823,9 +1176,16 @@ def normalize_candidate(raw: dict[str, Any], *, default_source: str) -> dict[str
         status = "empty"
         confidence = min(confidence, 0.2)
     elif closed_only:
-        # All-closed with no open times is usually a bad guess unless evidence is strong.
         status = "partial"
         confidence = min(confidence, 0.35)
+    elif known_days < 5 and status == "ok":
+        status = "partial"
+
+    # Unknown-heavy weeks should not outrank a complete Yelp schedule.
+    if known_days <= 2:
+        confidence = min(confidence, 0.45)
+    elif known_days <= 4:
+        confidence = min(confidence, 0.7)
 
     source = str(raw.get("source") or default_source).lower().strip()
     if source in {"google_search", "search"}:
@@ -843,6 +1203,7 @@ def normalize_candidate(raw: dict[str, Any], *, default_source: str) -> dict[str
         "hours_json": hours_out,
         "hours_text": hours_text,
         "any_open": any_open,
+        "known_days": known_days,
     }
 
 
@@ -878,10 +1239,12 @@ def label_search_source(urls: list[str]) -> str:
 
 
 def candidate_rank_key(c: dict[str, Any]) -> tuple:
-    """Higher is better."""
+    """Higher is better — completeness beats a high-confidence sparse website parse."""
     status_bonus = {"ok": 2, "partial": 1, "empty": 0}.get(c.get("status") or "", 0)
+    known = int(c.get("known_days") or 0)
     open_bonus = 1 if c.get("any_open") else 0
-    return (status_bonus, open_bonus, float(c.get("confidence") or 0.0))
+    yelp_bonus = 1 if c.get("source") == "yelp" else 0
+    return (known, status_bonus, yelp_bonus, open_bonus, float(c.get("confidence") or 0.0))
 
 
 def pick_best_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1076,35 +1439,43 @@ def fetch_one(
 
     candidates: list[dict[str, Any]] = []
 
-    # Deterministic parsers — usually beat the LLM on Yelp-style snippets.
+    # Deterministic parsers — Yelp page/snippet first, then website.
+    yelp_text = (
+        search.get("yelp_page_text")
+        or search.get("best_schedule_snippet")
+        or ""
+    )
+    yelp_parsed = parse_schedule_from_text(str(yelp_text)) or parse_schedule_from_text(
+        search.get("text") or ""
+    )
+    if yelp_parsed:
+        yelp_urls = list(search.get("yelp_urls") or []) or list(search.get("urls") or [])
+        search_label = "yelp" if yelp_urls and any("yelp.com" in u for u in yelp_urls) else label_search_source(
+            list(search.get("urls") or [])
+        )
+        # Full Yelp weeks get a confidence floor so they beat sparse website parses.
+        base_conf = float(yelp_parsed.get("confidence") or 0.0)
+        if int(yelp_parsed.get("known_days") or 0) >= 6 and search_label == "yelp":
+            base_conf = max(base_conf, 0.95)
+        c = normalize_candidate(
+            {**yelp_parsed, "source": search_label, "confidence": base_conf},
+            default_source=search_label,
+        )
+        c["source"] = search_label
+        candidates.append(c)
+
     web_parsed = parse_schedule_from_text(website.get("text") or "")
     if web_parsed:
+        # Do NOT inflate website confidence — incomplete weeks stay partial/low.
         c = normalize_candidate(
             {
                 **web_parsed,
                 "source": "website",
-                "confidence": max(float(web_parsed.get("confidence") or 0.85), 0.85),
+                "confidence": float(web_parsed.get("confidence") or 0.0),
             },
             default_source="website",
         )
         c["source"] = "website"
-        candidates.append(c)
-
-    best_snip = search.get("best_schedule_snippet") or ""
-    search_parsed = parse_schedule_from_text(best_snip) or parse_schedule_from_text(
-        search.get("text") or ""
-    )
-    if search_parsed:
-        search_label = label_search_source(list(search.get("urls") or []))
-        c = normalize_candidate(
-            {
-                **search_parsed,
-                "source": search_label,
-                "confidence": max(float(search_parsed.get("confidence") or 0.9), 0.9),
-            },
-            default_source=search_label,
-        )
-        c["source"] = search_label
         candidates.append(c)
 
     prompt = build_hours_prompt(
@@ -1202,7 +1573,7 @@ def print_result(place: dict[str, Any], payload: dict[str, Any]) -> None:
         for c in sorted(cands, key=candidate_rank_key, reverse=True):
             print(
                 f"  {c.get('confidence', 0):.2f}  {c.get('source')}  "
-                f"status={c.get('status')}  open_days={1 if c.get('any_open') else 0}"
+                f"status={c.get('status')}  known_days={c.get('known_days', 0)}"
             )
     print(f"source used: {payload.get('source')}  confidence={result.get('confidence')}")
     print(f"status: {result.get('status')}")

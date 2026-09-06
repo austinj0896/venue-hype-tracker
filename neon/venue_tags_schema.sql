@@ -48,6 +48,19 @@ CREATE TABLE IF NOT EXISTS venue_tag_rejects (
     PRIMARY KEY (google_place_id, tag, reason)
 );
 
+-- Full canonical vibe taxonomy (synced from scripts/vibe_taxonomy.py).
+CREATE TABLE IF NOT EXISTS vibe_taxonomy (
+    tag          TEXT PRIMARY KEY,
+    category     TEXT NOT NULL,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_vibe_taxonomy_category CHECK (
+        category IN ('restaurant_bar_vibes', 'bar_specific', 'general')
+    )
+);
+
 CREATE INDEX IF NOT EXISTS idx_venue_tags_tag ON venue_tags (tag);
 CREATE INDEX IF NOT EXISTS idx_venue_tags_tagged_at ON venue_tags (tagged_at);
 CREATE INDEX IF NOT EXISTS idx_venue_tag_rejects_place ON venue_tag_rejects (google_place_id);
+CREATE INDEX IF NOT EXISTS idx_vibe_taxonomy_category ON vibe_taxonomy (category);
