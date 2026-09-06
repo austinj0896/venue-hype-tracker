@@ -48,6 +48,7 @@ from date_planner import (
 from geo import filter_by_radius, miles_to_meters
 from location_ui import render_location_picker
 from app_log import log_event, show_recent_errors
+from onboarding import onboarding_complete, render_onboarding
 from places_data import fetch_community_ratings, fetch_venues_with_coords
 from profile_options import preferred_types_from_activities
 from profile_setup import render_profile_settings, render_profile_setup
@@ -2054,20 +2055,17 @@ def render_plan_date(email: str) -> None:
 
 
 def render_login() -> None:
-    render_apres_header("Rate the coast.")
+    render_apres_header("Create your account.")
     st.markdown(
-        '<p class="apres-sub">venue ratings &middot; pick a neighborhood in Discover</p>',
+        '<p class="apres-sub">email only · no password · under a minute</p>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<div class="empty-state">'
-        '<div class="empty-state-eyebrow">Welcome</div>'
-        '<div class="empty-state-title">Your taste, mapped</div>'
+        '<div class="empty-state-eyebrow">Registration</div>'
+        '<div class="empty-state-title">Start with your email</div>'
         '<div class="empty-state-mark"></div>'
-        "<p>Rate places you’ve been. Skip what you haven’t — come back when you have.</p>"
-        '<p style="margin-top:0.75rem;font-size:12px;color:var(--text-light);">'
-        "Email only. No password. Your ratings stay yours."
-        "</p>"
+        "<p>We’ll ask a few taste questions next — so Discover and dates fit you from the first night.</p>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -2445,6 +2443,9 @@ def main() -> None:
         log_event("inject_styles", "Style injection failed", level="error", exc=exc)
 
     if "user_email" not in st.session_state:
+        if not onboarding_complete():
+            render_onboarding()
+            return
         render_login()
         return
 
