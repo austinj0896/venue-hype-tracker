@@ -797,6 +797,36 @@ div[data-testid="stDialog"] iframe {
     color: rgba(248,230,210,0.55);
     font-style: italic;
 }
+.partner-banner {
+    background:
+        linear-gradient(165deg, rgba(211,163,69,0.16) 0%, transparent 42%),
+        linear-gradient(180deg, #7A5643 0%, #5E3F31 100%);
+    border: 1px solid rgba(248, 230, 210, 0.12);
+    border-radius: 16px;
+    padding: 1rem 1.1rem 1.05rem;
+    margin: 0.35rem 0 0.85rem;
+    color: #F8E6D2;
+}
+.partner-banner-eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(211,163,69,0.95);
+    margin: 0 0 0.3rem;
+}
+.partner-banner-name {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 26px;
+    font-weight: 500;
+    font-style: italic;
+    line-height: 1.1;
+    margin: 0 0 0.25rem;
+    color: #F8E6D2;
+}
+.partner-banner-meta {
+    font-size: 13px;
+    color: rgba(248,230,210,0.7);
+}
 .photo-editor-label {
     font-size: 11px;
     font-weight: 500;
@@ -1154,6 +1184,7 @@ def _render_connection_controls(
     draft: dict[str, Any],
     *,
     key_prefix: str,
+    hide_partner_invite: bool = False,
 ) -> tuple[str, bool | None, str]:
     """Shared relationship UI. Returns (status_key, open_to_dates, partner_email)."""
     status_keys = list(RELATIONSHIP_STATUS_KEYS)
@@ -1191,14 +1222,15 @@ def _render_connection_controls(
         )
     else:
         st.caption("Coupled profiles stay private — only a linked partner can see yours.")
-        partner_email = st.text_input(
-            "Partner email (optional)",
-            value=str(draft.get("partner_email_draft") or ""),
-            key=f"{key_prefix}_partner_email",
-            placeholder="their@email.com",
-            help="We’ll send them an in-app request if they already have Après. "
-            "Email invites for new accounts come later.",
-        ).strip()
+        if not hide_partner_invite:
+            partner_email = st.text_input(
+                "Partner email (optional)",
+                value=str(draft.get("partner_email_draft") or ""),
+                key=f"{key_prefix}_partner_email",
+                placeholder="their@email.com",
+                help="We’ll send them an in-app request if they already have Après. "
+                "Email invites for new accounts come later.",
+            ).strip()
         open_to = False
 
     return status, open_to, partner_email
@@ -1402,6 +1434,8 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
 
     draft = _get_draft(email, profile)
     _hydrate_draft_photos(email, draft, profile)
+
+    _render_partner_banner(email)
 
     preview_open = bool(st.session_state.get(PREVIEW_OPEN_KEY))
     if st.button(
@@ -1642,6 +1676,81 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         st.rerun()
 
 
+def _partner_display_name(partner_email: str) -> tuple[str, dict[str, Any]]:
+    """Return (display_name, profile_row) for a linked partner."""
+    other = fetch_profile(partner_email, include_photo=False) or {}
+    first = (other.get("FIRST_NAME") or "").strip()
+    last = (other.get("LAST_NAME") or "").strip()
+    if first and last:
+        name = f"{first} {last}"
+    elif first:
+        name = first
+    else:
+        name = partner_email
+    return name, other
+
+
+def _render_partner_banner(email: str) -> None:
+    """Top-of-profile callout when a partner is linked."""
+    partner = get_linked_partner(email)
+    if not partner:
+        return
+    name, other = _partner_display_name(partner)
+    status = relationship_preview_line(
+        other.get("RELATIONSHIP_STATUS"),
+        other.get("OPEN_TO_DATES"),
+    )
+    status_bit = f" · {escape(status)}" if status else ""
+    st.markdown(
+        f"""
+        <div class="partner-banner">
+          <div class="partner-banner-eyebrow">Your partner</div>
+          <div class="partner-banner-name">{escape(name)}</div>
+          <div class="partner-banner-meta">{escape(partner)}{status_bit}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("View their profile", use_container_width=True, key="banner_view_partner"):
+            st.session_state[PARTNER_PREVIEW_KEY] = True
+            st.session_state[PREVIEW_IDX_KEY] = 0
+            st.rerun()
+    with b2:
+        if st.button("Unlink", use_container_width=True, key="banner_unlink_partner"):
+            unlink_partner(email)
+            st.session_state[PARTNER_PREVIEW_KEY] = False
+            st.session_state[PROFILE_FLASH_KEY] = f"Unlinked from {name}."
+            st.rerun()
+
+    if st.session_state.get(PARTNER_PREVIEW_KEY):
+        if can_view_profile(email, partner):
+            photos = list_profile_photos(partner, include_bytes=True)
+            _open_profile_preview_dialog(
+                first_name=str(other.get("FIRST_NAME") or name),
+                city=str(other.get("CITY") or ""),
+                neighbourhood=str(other.get("NEIGHBOURHOOD") or ""),
+                dietary=list(other.get("DIETARY_NEEDS") or []),
+                activities=list(other.get("ACTIVITY_PREFERENCES") or []),
+                photos=[
+                    {
+                        "PHOTO_ID": p.get("PHOTO_ID"),
+                        "PHOTO_B64": p.get("PHOTO_B64"),
+                        "PHOTO_MIME": p.get("PHOTO_MIME"),
+                    }
+                    for p in photos
+                    if p.get("PHOTO_B64")
+                ],
+                date_of_birth=other.get("DATE_OF_BIRTH"),
+                relationship_status=other.get("RELATIONSHIP_STATUS"),
+                open_to_dates=other.get("OPEN_TO_DATES"),
+            )
+        else:
+            st.warning("You can’t view that profile.")
+            st.session_state[PARTNER_PREVIEW_KEY] = False
+
+
 def _render_partner_inbox(email: str) -> None:
     inbound = list_pending_inbound(email)
     notifs = list_notifications(email, limit=20)
@@ -1696,53 +1805,24 @@ def _render_connection_settings(
     profile: dict[str, Any],
 ) -> None:
     st.markdown('<div class="section-label">Connection</div>', unsafe_allow_html=True)
-    status, open_to, partner_email = _render_connection_controls(draft, key_prefix="edit")
-    draft["relationship_status"] = status
-    draft["open_to_dates"] = open_to
-    draft["partner_email_draft"] = partner_email
-    _save_draft(draft)
-
     partner = get_linked_partner(email)
     if partner:
-        st.success(f"Linked with **{partner}**")
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("View partner profile", use_container_width=True, key="view_partner"):
-                st.session_state[PARTNER_PREVIEW_KEY] = True
-                st.session_state[PREVIEW_IDX_KEY] = 0
-                st.rerun()
-        with b2:
-            if st.button("Unlink partner", use_container_width=True, key="unlink_partner"):
-                unlink_partner(email)
-                st.session_state[PROFILE_FLASH_KEY] = "Partner unlinked."
-                st.rerun()
-
-    if st.session_state.get(PARTNER_PREVIEW_KEY) and partner:
-        if can_view_profile(email, partner):
-            other = fetch_profile(partner, include_photo=False) or {}
-            photos = list_profile_photos(partner, include_bytes=True)
-            _open_profile_preview_dialog(
-                first_name=str(other.get("FIRST_NAME") or "Partner"),
-                city=str(other.get("CITY") or ""),
-                neighbourhood=str(other.get("NEIGHBOURHOOD") or ""),
-                dietary=list(other.get("DIETARY_NEEDS") or []),
-                activities=list(other.get("ACTIVITY_PREFERENCES") or []),
-                photos=[
-                    {
-                        "PHOTO_ID": p.get("PHOTO_ID"),
-                        "PHOTO_B64": p.get("PHOTO_B64"),
-                        "PHOTO_MIME": p.get("PHOTO_MIME"),
-                    }
-                    for p in photos
-                    if p.get("PHOTO_B64")
-                ],
-                date_of_birth=other.get("DATE_OF_BIRTH"),
-                relationship_status=other.get("RELATIONSHIP_STATUS"),
-                open_to_dates=other.get("OPEN_TO_DATES"),
-            )
-        else:
-            st.warning("You can’t view that profile.")
-            st.session_state[PARTNER_PREVIEW_KEY] = False
+        name, _other = _partner_display_name(partner)
+        st.caption(f"Linked with {name} ({partner}). Change status below if needed.")
+        # Skip partner-email invite while already linked.
+        status, open_to, _ = _render_connection_controls(
+            draft, key_prefix="edit", hide_partner_invite=True
+        )
+        draft["relationship_status"] = status
+        draft["open_to_dates"] = open_to
+        draft["partner_email_draft"] = ""
+        _save_draft(draft)
+    else:
+        status, open_to, partner_email = _render_connection_controls(draft, key_prefix="edit")
+        draft["relationship_status"] = status
+        draft["open_to_dates"] = open_to
+        draft["partner_email_draft"] = partner_email
+        _save_draft(draft)
 
     outbound = list_pending_outbound(email)
     for req in outbound:
