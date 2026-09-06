@@ -453,8 +453,8 @@ def render_profile_preview_card(
   }}
   .card {{
     width: 100%;
-    max-width: 380px;
-    margin: 0 auto;
+    max-width: none;
+    margin: 0;
     background:
       linear-gradient(165deg, rgba(211,163,69,0.18) 0%, transparent 38%),
       linear-gradient(180deg, #7A5643 0%, #704D3B 55%, #5E3F31 100%);
@@ -462,6 +462,7 @@ def render_profile_preview_card(
     border: 1px solid rgba(248, 230, 210, 0.12);
     overflow: hidden;
     color: #F8E6D2;
+    box-sizing: border-box;
   }}
   .stage {{
     position: relative;
@@ -699,19 +700,29 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Give the preview modal a phone-card shape; dark chrome matches the card. */
+/* Center preview modal in the viewport (Streamlit's fixed left offset breaks when we shrink width). */
 div[data-testid="stDialog"] > div[role="dialog"],
 div[data-testid="stModal"] > div[role="dialog"],
 [data-testid="stDialog"] section[role="dialog"],
 div[data-testid="stDialog"] div[role="dialog"] {
+    position: fixed !important;
+    left: 50% !important;
+    top: 50% !important;
+    right: auto !important;
+    bottom: auto !important;
+    inset: auto !important;
+    transform: translate(-50%, -50%) !important;
+    margin: 0 !important;
     max-width: min(96vw, 400px) !important;
     width: min(96vw, 400px) !important;
     max-height: 94vh !important;
+    overflow-x: hidden !important;
     overflow-y: auto !important;
     padding: 0.65rem 0.55rem 0.75rem !important;
     background: #2C1A10 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
     color: #F8E6D2 !important;
+    box-sizing: border-box !important;
 }
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
 div[data-testid="stDialog"] h2,
@@ -721,6 +732,13 @@ div[data-testid="stDialog"] [data-testid="stWidgetLabel"] {
 div[data-testid="stDialog"] button[kind="header"],
 div[data-testid="stDialog"] button[aria-label="Close"] {
     color: #F8E6D2 !important;
+}
+div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"],
+div[data-testid="stDialog"] iframe {
+    display: block !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    max-width: 100% !important;
 }
 .preview-chip {
     display: inline-flex;
