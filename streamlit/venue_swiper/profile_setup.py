@@ -436,8 +436,8 @@ def render_profile_preview_card(
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
-    shell_h = 480
-    photo_h = 200
+    shell_h = 400
+    photo_h = 170
     uri0 = uris[idx] if n and uris[idx] else ""
     img_html = (
         f'<img id="photo" src="{uri0}" alt=""/>'
@@ -511,13 +511,14 @@ def render_profile_preview_card(
   .body {{
     flex: 1 1 auto;
     min-height: 0;
+    height: 0; /* force flex child to respect overflow scroll */
     overflow-x: hidden;
-    overflow-y: auto;
+    overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
     touch-action: pan-y;
     background: linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
-    padding: 0.85rem 1rem 1.25rem;
+    padding: 0.85rem 1rem 1.5rem;
     box-sizing: border-box;
   }}
   .preview-name {{
@@ -545,7 +546,7 @@ def render_profile_preview_card(
   .preview-chip.muted {{ color: rgba(248,230,210,0.55); font-style: italic; }}
   .footer {{
     flex: 0 0 auto;
-    padding: 0.55rem 0.75rem calc(0.7rem + env(safe-area-inset-bottom, 0px));
+    padding: 0.55rem 0.75rem 0.7rem;
     background: #5E3F31;
     border-radius: 0 0 18px 18px;
     border-top: 1px solid rgba(248,230,210,0.1);
@@ -574,8 +575,9 @@ def render_profile_preview_card(
     <div class="preview-chips">{act_html}</div>
     <div class="preview-group-label">Dietary</div>
     <div class="preview-chips">{diet_html}</div>
+    <div style="height:12px" aria-hidden="true"></div>
   </div>
-  <div class="footer">
+  <div class="footer" id="footer">
     <button type="button" class="close-btn" id="closeBtn">Close preview</button>
   </div>
 </div>
@@ -586,18 +588,20 @@ def render_profile_preview_card(
   var img = document.getElementById("photo");
 
   function fitToViewport() {{
-    var avail = 0;
+    // CRITICAL: never size the card near full viewport height — Streamlit dialog
+    // chrome + max-height:92vh will clip the Close footer and the end of Dietary.
+    var parentH = 640;
     try {{
-      var parentH = window.parent.innerHeight
+      parentH = window.parent.innerHeight
         || window.parent.document.documentElement.clientHeight
         || 640;
-      // Dialog title/chrome only — Close is inside this iframe footer
-      avail = Math.floor(parentH - 96);
     }} catch (e) {{
-      avail = Math.floor((window.innerHeight || 640) * 0.78);
+      parentH = window.innerHeight || 640;
     }}
-    avail = Math.max(340, Math.min(avail, 620));
-    var photoH = avail < 400 ? 150 : (avail < 500 ? 180 : 210);
+    var fromDialog = Math.floor(parentH * 0.92 - 72);
+    var fromSafe = Math.floor(parentH * 0.68);
+    var avail = Math.max(300, Math.min(fromDialog, fromSafe, 480));
+    var photoH = avail < 380 ? 140 : (avail < 440 ? 160 : 180);
     var stage = document.getElementById("stage");
     var shell = document.getElementById("shell");
     if (stage) {{
@@ -634,6 +638,8 @@ def render_profile_preview_card(
       if (dlg) {{
         dlg.style.background = "#2C1A10";
         dlg.style.padding = "0.4rem";
+        dlg.style.maxHeight = "92vh";
+        dlg.style.overflow = "hidden";
         var node = dlg.parentElement;
         for (var i = 0; i < 4 && node; i++) {{
           var kids = node.children || [];
@@ -861,8 +867,7 @@ div[data-testid="stModal"] {
     color: #F8E6D2 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
     max-height: min(92dvh, 92vh) !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
+    overflow: hidden !important;
 }
 /* Blur page behind any open dialog (preview / partner). */
 body:has([data-testid="stDialog"]) [data-testid="stAppViewContainer"],
