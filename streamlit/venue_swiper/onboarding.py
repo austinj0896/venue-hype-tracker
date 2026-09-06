@@ -19,21 +19,21 @@ LOGIN_MODE_KEY = "apres_login_mode"  # "new" | "returning"
 
 _SLIDES = (
     {
-        "eyebrow": "Slide 1",
-        "title": "Tell us what you love.",
-        "body": "Rate places you’ve been. Your scores become the base for better picks.",
+        "eyebrow": "01",
+        "title": "Your taste, remembered.",
+        "body": "Rate a few places. We’ll never forget what you love.",
         "cta": "Next",
     },
     {
-        "eyebrow": "Slide 2",
-        "title": "Skip what you don’t.",
-        "body": "Haven’t been yet? Park it and come back when you have. No pressure to invent an opinion.",
+        "eyebrow": "02",
+        "title": "Your city, your terms.",
+        "body": "Where you are, what you’re into, what you’d rather skip.",
         "cta": "Next",
     },
     {
-        "eyebrow": "Slide 3",
-        "title": "We’ll line up the rest.",
-        "body": "City, neighbourhood, diet, and activities. Answer once, then Discover and dates use it.",
+        "eyebrow": "03",
+        "title": "We handle the rest.",
+        "body": "Great nights out, without the planning.",
         "cta": "Create account",
     },
 )
