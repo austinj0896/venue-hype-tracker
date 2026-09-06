@@ -28,6 +28,7 @@ CITY_TIMEZONES: dict[str, str] = {
     "Santa Monica": "America/Los_Angeles",
     "Inglewood": "America/Los_Angeles",
     "Los Angeles": "America/Los_Angeles",
+    "New York": "America/New_York",
 }
 
 DEFAULT_TZ = "America/Los_Angeles"
