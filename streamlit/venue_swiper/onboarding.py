@@ -42,47 +42,33 @@ _SLIDES = (
 def onboarding_css() -> str:
     return """
 .ob-splash {
-    min-height: min(72dvh, 620px);
-    min-height: 72vh;
+    min-height: min(52dvh, 420px);
+    min-height: 52vh;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 2.25rem 1.25rem 1.75rem;
-    margin: 0.25rem 0 1rem;
-    border-radius: 20px;
-    background:
-        radial-gradient(90% 70% at 50% 35%, rgba(211,163,69,0.12) 0%, transparent 58%),
-        #000000;
-    border: 1px solid rgba(211, 163, 69, 0.14);
-    box-shadow: 0 18px 40px rgba(44, 26, 16, 0.18);
+    padding: 2.5rem 1rem 1.25rem;
+    margin: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
     animation: apres-fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
-    overflow: hidden;
 }
 @supports (height: 1dvh) {
     .ob-splash {
-        min-height: min(72dvh, 620px);
+        min-height: min(52dvh, 420px);
     }
 }
 .ob-mark,
 .apres-brand-hero {
-    width: min(88%, 240px);
+    width: min(82%, 220px);
     height: auto;
     display: block;
-    margin: 0 auto 1.15rem;
+    margin: 0 auto 1.35rem;
     /* Optical center: left swash on A pulls weight left */
     transform: translateX(4%);
-}
-.ob-tagline {
-    font-family: 'Cormorant Garamond', Georgia, serif;
-    font-size: 16px;
-    font-style: italic;
-    font-weight: 400;
-    letter-spacing: 0.02em;
-    color: rgba(248, 230, 210, 0.78);
-    margin: 0 0 1.5rem;
-    max-width: 18rem;
 }
 .ob-pulse {
     width: 10px;
@@ -179,7 +165,6 @@ def render_onboarding() -> None:
         st.markdown(
             '<div class="ob-splash">'
             f"{brand_mark_html(size='hero')}"
-            '<div class="ob-tagline">Find what comes next.</div>'
             '<div class="ob-pulse" aria-hidden="true"></div>'
             "</div>",
             unsafe_allow_html=True,

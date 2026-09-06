@@ -24,11 +24,14 @@ def brand_mark_html(*, size: str = "hero") -> str:
     """HTML for the Après wordmark.
 
     size:
-      hero   — gold transparent mark (dark splash)
-      header — dark metallic transparent mark (cream chrome)
+      hero   — gold transparent mark on cream splash
+      header — dark metallic transparent mark in chrome
     """
     if size == "hero":
-        uri = _data_uri(str(_WORDMARK_LIGHT), "image/png")
+        # Gold mark reads cleanly on the cream app background.
+        uri = _data_uri(str(_WORDMARK_LIGHT), "image/png") or _data_uri(
+            str(_WORDMARK_DARK), "image/png"
+        )
         cls = "apres-brand-hero"
     else:
         uri = _data_uri(str(_WORDMARK_DARK), "image/png") or _data_uri(
