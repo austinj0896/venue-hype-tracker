@@ -356,7 +356,7 @@ def _consume_preview_close_query() -> None:
         pass
 
 
-@st.dialog(" ", width="small", on_dismiss=_dismiss_profile_preview)
+@st.dialog("Preview", width="small", on_dismiss=_dismiss_profile_preview)
 def _open_profile_preview_dialog(
     *,
     first_name: str,
@@ -369,7 +369,7 @@ def _open_profile_preview_dialog(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Modal profile preview — dismiss via Close preview, Escape, or click outside."""
+    """Modal profile preview — one viewport-sized card; only the card body scrolls."""
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -381,9 +381,6 @@ def _open_profile_preview_dialog(
         relationship_status=relationship_status,
         open_to_dates=open_to_dates,
     )
-    if st.button("Close preview", key="preview_dialog_close", use_container_width=True):
-        _dismiss_profile_preview()
-        st.rerun()
 
 
 def render_profile_preview_card(
@@ -398,7 +395,7 @@ def render_profile_preview_card(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Phone-sized dating card; photo taps flip in-place; dialog scrolls the body."""
+    """Single iframe card: fixed photo + scrolling body + Close. No parent-DOM hacks."""
     import json
 
     import streamlit.components.v1 as components
@@ -439,66 +436,143 @@ def render_profile_preview_card(
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
-    # Photo-only iframe (no inner scroll). Keep short so name/chips fit with little dialog scroll.
-    photo_h = 280
-    # Collapse Streamlit dialog chrome + kill nested scroll traps (runs in parent doc).
-    polish_script = """
-<script>
-(function() {
-  function polishDialog() {
-    try {
-      var doc = window.parent.document;
-      var dlg = doc.querySelector('[data-testid="stDialog"]');
-      if (!dlg) return;
-      dlg.querySelectorAll('h2').forEach(function(h) {
-        h.style.cssText = 'display:none!important;height:0!important;margin:0!important;padding:0!important;';
-      });
-      var closeNodes = dlg.querySelectorAll(
-        'button[aria-label="Close"], button[kind="header"],' +
-        '[data-testid="stBaseButton-header"] button,' +
-        '[data-testid="stBaseButton-headerNoPadding"] button'
-      );
-      closeNodes.forEach(function(btn) {
-        var row = btn.closest('[data-testid="stHorizontalBlock"]') || btn.parentElement;
-        if (row) {
-          row.style.cssText = 'position:absolute;top:0;right:0;height:0;margin:0;padding:0;overflow:visible;z-index:40;';
-        }
-        btn.style.display = 'none';
-      });
-      dlg.style.padding = '0.25rem 0.35rem 0.5rem';
-      dlg.style.maxHeight = '92dvh';
-      dlg.style.overflowY = 'auto';
-      dlg.style.overflowX = 'hidden';
-      dlg.style.webkitOverflowScrolling = 'touch';
-      dlg.querySelectorAll('[data-testid="stVerticalBlock"]').forEach(function(el) {
-        el.style.maxHeight = 'none';
-        el.style.overflow = 'visible';
-      });
-    } catch (e) {}
-  }
-  polishDialog();
-  setTimeout(polishDialog, 50);
-  setTimeout(polishDialog, 200);
-})();
-</script>
-"""
-    if n:
-        uri0 = uris[idx] if uris[idx] else ""
-        img_html = (
-            f'<img id="photo" src="{uri0}" alt=""/>'
-            if uri0
-            else '<div class="empty">No photo</div>'
-        )
-        segments = "".join(
-            f'<span class="seg{" on" if i == idx else ""}"></span>' for i in range(n)
-        )
-        taps = (
-            '<div class="tap left" id="tapL" role="button" aria-label="Previous photo"></div>'
-            '<div class="tap right" id="tapR" role="button" aria-label="Next photo"></div>'
-            if n > 1
-            else ""
-        )
-        nav_script = f"""
+    # Fit typical phone / small dialog; only .body scrolls inside.
+    shell_h = 620
+    photo_h = 260
+    uri0 = uris[idx] if n and uris[idx] else ""
+    img_html = (
+        f'<img id="photo" src="{uri0}" alt=""/>'
+        if uri0
+        else '<div class="empty">Add photos to fill this card</div>'
+    )
+    segments = (
+        "".join(f'<span class="seg{" on" if i == idx else ""}"></span>' for i in range(n))
+        if n
+        else ""
+    )
+    segs_html = f'<div class="segs" id="segs">{segments}</div>' if n else ""
+    taps = (
+        '<div class="tap left" id="tapL" role="button" aria-label="Previous photo"></div>'
+        '<div class="tap right" id="tapR" role="button" aria-label="Next photo"></div>'
+        if n > 1
+        else ""
+    )
+
+    components.html(
+        f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<style>
+  html, body {{
+    margin: 0; padding: 0; height: 100%;
+    background: #2C1A10;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #F8E6D2;
+  }}
+  .shell {{
+    height: {shell_h}px;
+    display: flex;
+    flex-direction: column;
+    background: #2C1A10;
+    overflow: hidden;
+    border-radius: 18px;
+  }}
+  .stage {{
+    position: relative;
+    flex: 0 0 {photo_h}px;
+    height: {photo_h}px;
+    background: #2C1A10;
+    overflow: hidden;
+    border-radius: 18px 18px 0 0;
+  }}
+  .stage img {{
+    width: 100%; height: 100%; object-fit: cover; object-position: center 18%;
+    display: block; pointer-events: none; user-select: none; -webkit-user-drag: none;
+  }}
+  .empty {{
+    display: flex; align-items: center; justify-content: center; height: 100%;
+    color: rgba(248,230,210,.55); font: 15px/1.4 system-ui, sans-serif;
+    padding: 1.5rem; text-align: center;
+  }}
+  .segs {{
+    position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 4px;
+    z-index: 3; pointer-events: none;
+  }}
+  .seg {{ flex: 1; height: 3px; border-radius: 99px; background: rgba(248,230,210,.28); }}
+  .seg.on {{ background: #F8E6D2; }}
+  .tap {{
+    position: absolute; top: 0; bottom: 0; width: 50%; z-index: 4; cursor: pointer;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  }}
+  .tap.left {{ left: 0; }}
+  .tap.right {{ right: 0; }}
+  .tap:active {{ background: rgba(248,230,210,.1); }}
+  .body {{
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    background: linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
+    padding: 0.85rem 1rem 0.75rem;
+  }}
+  .preview-name {{
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 28px; font-weight: 500; font-style: italic;
+    color: #F8E6D2; line-height: 1.1; margin: 0 0 0.25rem;
+  }}
+  .preview-place {{
+    font-size: 13px; color: rgba(248,230,210,0.72); margin: 0 0 0.3rem;
+  }}
+  .preview-status {{
+    font-size: 12px; color: rgba(211,163,69,0.95); margin: 0 0 0.65rem;
+  }}
+  .preview-group-label {{
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(248,230,210,0.45); margin: 0.45rem 0 0.28rem;
+  }}
+  .preview-chips {{ display: flex; flex-wrap: wrap; gap: 0.3rem; }}
+  .preview-chip {{
+    display: inline-flex; align-items: center; min-height: 32px;
+    padding: 0.3rem 0.7rem; border-radius: 999px;
+    background: rgba(248,230,210,0.1); border: 1px solid rgba(248,230,210,0.14);
+    color: #F8E6D2; font-size: 13px;
+  }}
+  .preview-chip.muted {{ color: rgba(248,230,210,0.55); font-style: italic; }}
+  .footer {{
+    flex: 0 0 auto;
+    padding: 0.65rem 0.75rem 0.75rem;
+    background: #5E3F31;
+    border-radius: 0 0 18px 18px;
+  }}
+  .close-btn {{
+    width: 100%; min-height: 44px; border: none; border-radius: 12px;
+    background: #F8E6D2; color: #2C1A10;
+    font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }}
+  .close-btn:active {{ background: #E8D4BC; }}
+</style></head><body>
+<div class="shell">
+  <div class="stage">
+    {segs_html}
+    {img_html}
+    {taps}
+  </div>
+  <div class="body">
+    <div class="preview-name">{title}</div>
+    <div class="preview-place">{place}</div>
+    {status_html}
+    <div class="preview-group-label">Into</div>
+    <div class="preview-chips">{act_html}</div>
+    <div class="preview-group-label">Dietary</div>
+    <div class="preview-chips">{diet_html}</div>
+  </div>
+  <div class="footer">
+    <button type="button" class="close-btn" id="closeBtn">Close preview</button>
+  </div>
+</div>
 <script>
 (function() {{
   var URIS = {uris_json};
@@ -537,82 +611,36 @@ def render_profile_preview_card(
   }}
   bind(document.getElementById("tapL"), -1);
   bind(document.getElementById("tapR"), 1);
+
+  function closePreview() {{
+    try {{
+      var root = window.parent.document;
+      var nodes = root.querySelectorAll(
+        '[data-testid="stDialog"] button[aria-label="Close"],' +
+        '[data-testid="stModal"] button[aria-label="Close"],' +
+        '[data-testid="stDialog"] button[kind="header"]'
+      );
+      for (var i = 0; i < nodes.length; i++) {{
+        nodes[i].click();
+        return;
+      }}
+    }} catch (e) {{}}
+    try {{
+      var u = new URL(window.parent.location.href);
+      u.searchParams.set("{PREVIEW_CLOSE_QP}", "1");
+      window.parent.location.href = u.toString();
+    }} catch (e2) {{}}
+  }}
+  var cb = document.getElementById("closeBtn");
+  if (cb) cb.addEventListener("click", function(e) {{
+    e.preventDefault();
+    closePreview();
+  }});
 }})();
 </script>
-"""
-        components.html(
-            f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-  html, body {{ margin:0; padding:0; background:#2C1A10; }}
-  .stage {{
-    position:relative; width:100%; height:{photo_h}px;
-    background:#2C1A10; overflow:hidden;
-    border-radius:18px 18px 0 0;
-  }}
-  .stage img {{
-    width:100%; height:100%; object-fit:cover; object-position:center 18%;
-    display:block; pointer-events:none; user-select:none; -webkit-user-drag:none;
-  }}
-  .empty {{
-    display:flex; align-items:center; justify-content:center; height:100%;
-    color:rgba(248,230,210,.55); font:15px/1.4 system-ui,sans-serif; padding:1.5rem; text-align:center;
-  }}
-  .segs {{
-    position:absolute; top:12px; left:12px; right:12px; display:flex; gap:4px;
-    z-index:3; pointer-events:none;
-  }}
-  .seg {{ flex:1; height:3px; border-radius:99px; background:rgba(248,230,210,.28); }}
-  .seg.on {{ background:#F8E6D2; }}
-  .tap {{
-    position:absolute; top:0; bottom:0; width:50%; z-index:4; cursor:pointer;
-    -webkit-tap-highlight-color:transparent; touch-action:pan-y;
-  }}
-  .tap.left {{ left:0; }}
-  .tap.right {{ right:0; }}
-  .tap:active {{ background:rgba(248,230,210,.1); }}
-</style></head><body>
-<div class="stage">
-  <div class="segs" id="segs">{segments}</div>
-  {img_html}
-  {taps}
-</div>
-{nav_script}
-{polish_script}
 </body></html>""",
-            height=photo_h,
-            scrolling=False,
-        )
-    else:
-        components.html(
-            f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-  html,body{{margin:0;background:#2C1A10}}
-  .empty{{height:{photo_h}px;display:flex;align-items:center;justify-content:center;
-    color:rgba(248,230,210,.55);font:15px/1.4 system-ui,sans-serif;padding:1.5rem;text-align:center;
-    border-radius:18px 18px 0 0}}
-</style></head><body>
-<div class="empty">Add photos to fill this card</div>
-{polish_script}
-</body></html>""",
-            height=photo_h,
-            scrolling=False,
-        )
-
-    st.markdown(
-        f"""
-        <div class="preview-body-card">
-          <div class="preview-name">{title}</div>
-          <div class="preview-place">{place}</div>
-          {status_html}
-          <div class="preview-group-label">Into</div>
-          <div class="preview-chips">{act_html}</div>
-          <div class="preview-group-label">Dietary</div>
-          <div class="preview-chips">{diet_html}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+        height=shell_h,
+        scrolling=False,
     )
 
 
@@ -736,13 +764,14 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Preview dialog surface. Header collapse is JS-scoped to preview only
-   so Partner request keeps its title/close. */
+/* Preview dialog: fit viewport; do not scroll the dialog itself — the card iframe scrolls. */
 div[data-testid="stDialog"],
 div[data-testid="stModal"] {
     background: #2C1A10 !important;
     color: #F8E6D2 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
+    max-height: 92vh !important;
+    overflow: hidden !important;
 }
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
 div[data-testid="stDialog"] h2,
@@ -755,25 +784,6 @@ div[data-testid="stDialog"] [data-testid="stBaseButton-header"],
 div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button {
     color: #F8E6D2 !important;
     opacity: 1 !important;
-}
-/* Close preview: cream fill + dark label (dialog CSS was forcing light-on-light) */
-div[data-testid="stDialog"] button[kind="secondary"],
-div[data-testid="stDialog"] button[data-testid="baseButton-secondary"],
-div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"],
-div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] button {
-    background: #F8E6D2 !important;
-    border: 1px solid rgba(248, 230, 210, 0.55) !important;
-    color: #2C1A10 !important;
-}
-div[data-testid="stDialog"] button[kind="secondary"] p,
-div[data-testid="stDialog"] button[kind="secondary"] span,
-div[data-testid="stDialog"] button[data-testid="baseButton-secondary"] p,
-div[data-testid="stDialog"] button[data-testid="baseButton-secondary"] span,
-div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] p,
-div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] span,
-div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] button p,
-div[data-testid="stDialog"] [data-testid="stBaseButton-secondary"] button span {
-    color: #2C1A10 !important;
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
     margin: 0 !important;
