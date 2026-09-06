@@ -560,70 +560,69 @@ def save_profile_photos(email: str, photos: list[dict[str, Any]]) -> int:
 
 @st.cache_data(show_spinner=False, ttl=30)
 def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | None:
-    """Load profile. Does not run DDL on the hot path."""
+    """Load profile. Does not run DDL on the hot path.
+
+    Uses only ``user_profiles`` for the primary read so a missing gallery
+    table can never block login. Photo counts are enriched best-effort.
+    """
     if not email or backend() != "postgres":
         return None
     table = user_profiles_table()
-    links_t = user_profile_photo_links_table()
+    email_n = email.strip().lower()
     photo_cols = (
-        "p.profile_photo_b64, p.profile_photo_mime,"
+        "profile_photo_b64, profile_photo_mime,"
         if include_photo
         else ""
     )
     sql = f"""
         select
-            p.user_email,
-            p.first_name,
-            p.last_name,
-            p.date_of_birth,
-            p.phone,
-            p.city,
-            p.neighbourhood,
-            p.dietary_needs,
-            p.activity_preferences,
-            p.accepted_terms_at,
-            p.marketing_opt_in,
-            p.profile_complete,
+            user_email,
+            first_name,
+            last_name,
+            date_of_birth,
+            phone,
+            city,
+            neighbourhood,
+            dietary_needs,
+            activity_preferences,
+            accepted_terms_at,
+            marketing_opt_in,
+            profile_complete,
             {photo_cols}
-            coalesce(
-                (select count(*)::int from {links_t} g where lower(g.user_email) = lower(p.user_email)),
-                0
-            ) as photo_count,
-            (
-                exists (
-                    select 1 from {links_t} g
-                    where lower(g.user_email) = lower(p.user_email)
-                )
-                or (p.profile_photo_b64 is not null and length(p.profile_photo_b64) > 0)
-            ) as has_profile_photo,
-            p.created_at,
-            p.updated_at
-        from {table} p
-        where lower(p.user_email) = lower(%s)
+            (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
+                as has_profile_photo,
+            created_at,
+            updated_at
+        from {table}
+        where lower(user_email) = lower(%s)
         limit 1
     """
-    email_n = email.strip().lower()
-    try:
-        rows = run_query(sql, [email_n])
-    except Exception:
-        sql_legacy = f"""
-            select
-                user_email, first_name, last_name, date_of_birth, phone,
-                city, neighbourhood, dietary_needs, activity_preferences,
-                accepted_terms_at, marketing_opt_in, profile_complete,
-                {"profile_photo_b64, profile_photo_mime," if include_photo else ""}
-                (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
-                    as has_profile_photo,
-                created_at, updated_at
-            from {table}
-            where lower(user_email) = lower(%s)
-            limit 1
-        """
-        rows = run_query(sql_legacy, [email_n])
+    rows = run_query(sql, [email_n])
     row = normalize_profile_row(rows[0] if rows else None)
-    if row and not include_photo:
+    if not row:
+        return None
+    if not include_photo:
         row["PROFILE_PHOTO_B64"] = None
         row["PROFILE_PHOTO_MIME"] = None
+
+    # Best-effort gallery enrichment (never fail the profile load).
+    try:
+        links_t = user_profile_photo_links_table()
+        counts = run_query(
+            f"""
+            select count(*)::int as photo_count
+            from {links_t}
+            where lower(user_email) = lower(%s)
+            """,
+            [email_n],
+        )
+        if counts:
+            n = int(counts[0].get("PHOTO_COUNT") or 0)
+            row["PHOTO_COUNT"] = n
+            if n > 0:
+                row["HAS_PROFILE_PHOTO"] = True
+    except Exception:
+        pass
     return row
 
 

@@ -255,11 +255,28 @@ def _postgres_query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
                     conn.commit()
                     return []
                 rows = cur.fetchall()
+                conn.commit()
                 return _to_upper_rows([dict(row) for row in rows])
         except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            try:
+                conn = st.session_state.get("postgres_conn")
+                if conn is not None and not getattr(conn, "closed", 1):
+                    conn.rollback()
+            except Exception:
+                pass
             st.session_state.pop("postgres_conn", None)
             if attempt:
                 raise
+        except Exception:
+            # Undefined table / aborted txn / etc. — clear the failed transaction
+            # so a follow-up query on the same pooled connection can succeed.
+            try:
+                conn = st.session_state.get("postgres_conn")
+                if conn is not None and not getattr(conn, "closed", 1):
+                    conn.rollback()
+            except Exception:
+                pass
+            raise
     return []
 
 
@@ -276,9 +293,23 @@ def _postgres_execute(sql: str, params: list[Any]) -> None:
             conn.commit()
             return
         except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            try:
+                conn = st.session_state.get("postgres_conn")
+                if conn is not None and not getattr(conn, "closed", 1):
+                    conn.rollback()
+            except Exception:
+                pass
             st.session_state.pop("postgres_conn", None)
             if attempt:
                 raise
+        except Exception:
+            try:
+                conn = st.session_state.get("postgres_conn")
+                if conn is not None and not getattr(conn, "closed", 1):
+                    conn.rollback()
+            except Exception:
+                pass
+            raise
 
 
 def _snowflake_connection_params() -> dict[str, str]:
