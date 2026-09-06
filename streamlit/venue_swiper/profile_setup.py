@@ -162,15 +162,15 @@ def _hydrate_draft_photos(email: str, draft: dict[str, Any], profile: dict[str, 
 
 
 def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) -> None:
-    """Dating-app style photo grid — add / make main / remove, saves instantly."""
+    """Compact 2×3 photo grid with shared edit controls under it."""
     st.markdown('<div class="photo-editor-label">Photos</div>', unsafe_allow_html=True)
     st.markdown(
-        f'<p class="photo-editor-hint">Up to {MAX_PROFILE_PHOTOS}. Your main photo is what people see first. '
-        "Edits save automatically.</p>",
+        f'<p class="photo-editor-hint">Up to {MAX_PROFILE_PHOTOS}. Main photo shows first.</p>',
         unsafe_allow_html=True,
     )
 
     photos: list[dict[str, Any]] = list(draft.get("photos") or [])
+    sel_key = f"{key_prefix}_photo_sel"
 
     def _commit(next_photos: list[dict[str, Any]]) -> None:
         draft["photos"] = next_photos
@@ -179,64 +179,70 @@ def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) 
         _persist_photos_now(email, draft)
         st.rerun()
 
-    # Fixed 2×3 grid (or 1×3 if fewer slots) — always shows empty add slots.
-    for row_start in range(0, MAX_PROFILE_PHOTOS, 3):
-        cols = st.columns(3, gap="small")
-        for offset in range(3):
-            i = row_start + offset
-            with cols[offset]:
-                if i < len(photos):
-                    photo = photos[i]
-                    uri = photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME"))
-                    badge = (
-                        '<span class="photo-main-badge">Main</span>'
-                        if i == 0
-                        else f'<span class="photo-slot-num">{i + 1}</span>'
-                    )
-                    if uri:
-                        st.markdown(
-                            f'<div class="photo-tile">{badge}<img src="{uri}" alt="" /></div>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.markdown(
-                            '<div class="photo-tile photo-tile-empty">'
-                            '<span class="photo-plus-label">Broken</span></div>',
-                            unsafe_allow_html=True,
-                        )
-                    st.markdown('<div class="photo-actions">', unsafe_allow_html=True)
-                    if i == 0:
-                        st.markdown(
-                            '<div class="photo-main-static">Main photo</div>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        if st.button(
-                            "Make main",
-                            key=f"{key_prefix}_main_{i}",
-                            use_container_width=True,
-                        ):
-                            moved = photos.pop(i)
-                            photos.insert(0, moved)
-                            _commit(photos)
-                    if st.button(
-                        "Remove",
-                        key=f"{key_prefix}_del_{i}",
-                        use_container_width=True,
-                    ):
-                        photos.pop(i)
-                        _commit(photos)
-                    st.markdown("</div>", unsafe_allow_html=True)
-                else:
-                    st.markdown(
-                        '<div class="photo-tile photo-tile-empty">'
-                        '<span class="photo-plus">+</span></div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown(
-                        '<div class="photo-actions photo-actions-spacer" aria-hidden="true"></div>',
-                        unsafe_allow_html=True,
-                    )
+    # Pure visual grid — no per-tile buttons (keeps mobile compact).
+    tiles: list[str] = []
+    for i in range(MAX_PROFILE_PHOTOS):
+        if i < len(photos):
+            photo = photos[i]
+            uri = photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME"))
+            badge = (
+                '<span class="photo-main-badge">Main</span>'
+                if i == 0
+                else f'<span class="photo-slot-num">{i + 1}</span>'
+            )
+            if uri:
+                tiles.append(
+                    f'<div class="photo-tile">{badge}<img src="{uri}" alt="" /></div>'
+                )
+            else:
+                tiles.append(
+                    '<div class="photo-tile photo-tile-empty">'
+                    '<span class="photo-plus-label">?</span></div>'
+                )
+        else:
+            tiles.append(
+                '<div class="photo-tile photo-tile-empty">'
+                '<span class="photo-plus">+</span></div>'
+            )
+
+    st.markdown(
+        '<div class="photo-grid">'
+        + "".join(f'<div class="photo-grid-cell">{t}</div>' for t in tiles)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if photos:
+        options = [f"Photo {i + 1}" + (" · main" if i == 0 else "") for i in range(len(photos))]
+        current = st.session_state.get(sel_key, options[0])
+        if current not in options:
+            current = options[0]
+        picked = st.selectbox(
+            "Selected photo",
+            options,
+            index=options.index(current),
+            key=sel_key,
+            label_visibility="collapsed",
+        )
+        idx = options.index(picked)
+        a1, a2 = st.columns(2)
+        with a1:
+            if idx > 0:
+                if st.button("Make main", key=f"{key_prefix}_main", use_container_width=True):
+                    moved = photos.pop(idx)
+                    photos.insert(0, moved)
+                    st.session_state[sel_key] = "Photo 1 · main"
+                    _commit(photos)
+            else:
+                st.markdown(
+                    '<div class="photo-main-static">Main photo</div>',
+                    unsafe_allow_html=True,
+                )
+        with a2:
+            if st.button("Remove", key=f"{key_prefix}_del", use_container_width=True):
+                photos.pop(idx)
+                st.session_state.pop(sel_key, None)
+                _commit(photos)
 
     remaining = MAX_PROFILE_PHOTOS - len(photos)
     if remaining > 0:
@@ -677,21 +683,28 @@ div[data-testid="stMarkdown"]:has(.preview-body) {
 .photo-editor-hint {
     font-size: 13px;
     color: #7A5B48;
-    margin: 0 0 0.85rem;
+    margin: 0 0 0.65rem;
     line-height: 1.45;
+}
+.photo-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+    margin: 0 0 0.7rem;
+}
+.photo-grid-cell {
+    min-width: 0;
 }
 .photo-tile {
     position: relative;
-    aspect-ratio: 3 / 4;
+    aspect-ratio: 1 / 1;
     width: 100%;
-    border-radius: 16px;
+    border-radius: 10px;
     overflow: hidden;
     background:
         linear-gradient(160deg, rgba(211,163,69,0.12), transparent 55%),
         #E8D9C8;
     border: 1px solid rgba(112,77,59,0.12);
-    box-shadow: 0 2px 6px rgba(44,26,16,0.04);
-    margin: 0 0 0.45rem;
 }
 .photo-tile img {
     width: 100%;
@@ -704,14 +717,12 @@ div[data-testid="stMarkdown"]:has(.preview-body) {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.2rem;
     border: 1.5px dashed rgba(112,77,59,0.28);
     background: rgba(112,77,59,0.04);
-    box-shadow: none;
     color: #7A5B48;
 }
 .photo-tile-empty .photo-plus {
-    font-size: 28px;
+    font-size: 18px;
     line-height: 1;
     color: #D3A345;
     font-weight: 300;
@@ -724,14 +735,14 @@ div[data-testid="stMarkdown"]:has(.preview-body) {
 .photo-main-badge,
 .photo-slot-num {
     position: absolute;
-    top: 8px;
-    left: 8px;
+    top: 4px;
+    left: 4px;
     z-index: 2;
-    font-size: 10px;
+    font-size: 8px;
     font-weight: 600;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    padding: 0.28rem 0.5rem;
+    padding: 0.12rem 0.32rem;
     border-radius: 999px;
     backdrop-filter: blur(8px);
 }
@@ -743,35 +754,25 @@ div[data-testid="stMarkdown"]:has(.preview-body) {
     color: #F8E6D2;
     background: rgba(44,26,16,0.45);
 }
-.photo-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    margin-bottom: 0.85rem;
-    min-height: 5.5rem;
-}
-.photo-actions-spacer {
-    min-height: 5.5rem;
-}
 .photo-main-static {
-    min-height: 40px;
+    min-height: 38px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #7A5B48;
     background: rgba(211,163,69,0.14);
     border: 1px solid rgba(211,163,69,0.35);
-    border-radius: 10px;
+    border-radius: 8px;
 }
 div[data-testid="stFileUploader"] section {
     border: 1.5px dashed rgba(112,77,59,0.28) !important;
     background: rgba(112,77,59,0.04) !important;
-    border-radius: 16px !important;
-    padding: 1.15rem 1rem !important;
+    border-radius: 14px !important;
+    padding: 0.85rem 0.9rem !important;
     transition: border-color 200ms ease, background 200ms ease;
 }
 div[data-testid="stFileUploader"] section:hover {
@@ -787,11 +788,16 @@ div[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] p {
     color: #7A5B48 !important;
 }
 @media (max-width: 640px) {
-    .photo-tile {
-        border-radius: 14px;
+    .photo-editor-hint {
+        font-size: 12px;
+        margin: 0 0 0.4rem;
     }
-    .photo-actions {
-        margin-bottom: 0.7rem;
+    .photo-grid {
+        gap: 0.3rem;
+        margin-bottom: 0.5rem;
+    }
+    .photo-tile {
+        border-radius: 8px;
     }
 }
 """
