@@ -411,7 +411,8 @@ def list_pending_inbound(email: str) -> list[dict[str, Any]]:
     ]
 
 
-def respond_to_partner_request(to_email: str, request_id: str, *, accept: bool) -> None:
+def respond_to_partner_request(to_email: str, request_id: str, *, accept: bool) -> dict[str, Any]:
+    """Accept/decline a request. On accept, link pair and inherit requester relationship onto accepter."""
     if backend() != "postgres":
         raise RuntimeError("Partner linking requires Neon Postgres.")
     ensure_relationship_schema()
@@ -443,6 +444,15 @@ def respond_to_partner_request(to_email: str, request_id: str, *, accept: bool) 
         [new_status, str(request_id)],
     )
 
+    inherited: dict[str, Any] = {
+        "FROM_EMAIL": from_n,
+        "TO_EMAIL": to_n,
+        "ACCEPTED": bool(accept),
+        "RELATIONSHIP_STATUS": None,
+        "OPEN_TO_DATES": None,
+        "PROFILE_VISIBILITY": None,
+    }
+
     if accept:
         if get_linked_partner(to_n) or get_linked_partner(from_n):
             raise ValueError("One of you already has a linked partner.")
@@ -456,6 +466,7 @@ def respond_to_partner_request(to_email: str, request_id: str, *, accept: bool) 
             """,
             [a, b, from_n],
         )
+        inherited.update(_inherit_relationship_status(from_n, to_n))
         _insert_notification(
             from_n,
             "partner_accepted",
@@ -467,6 +478,63 @@ def respond_to_partner_request(to_email: str, request_id: str, *, accept: bool) 
             "partner_declined",
             {"request_id": str(request_id), "from_email": from_n, "to_email": to_n},
         )
+    return inherited
+
+
+def _inherit_relationship_status(from_email: str, to_email: str) -> dict[str, Any]:
+    """Copy requester's partnered status onto accepter (DB if row exists)."""
+    from profile_options import (
+        RELATIONSHIP_STATUS_KEYS,
+        RELATIONSHIP_STATUS_PARTNERED,
+        RELATIONSHIP_STATUS_SOLO,
+        compute_profile_visibility,
+    )
+    from user_profiles_store import clear_profile_cache
+
+    rows = run_query(
+        f"""
+        select relationship_status, open_to_dates, first_name
+        from {user_profiles_table()}
+        where lower(user_email) = lower(%s)
+        limit 1
+        """,
+        [_norm_email(from_email)],
+    )
+    status = ""
+    from_name = ""
+    if rows:
+        status = str(rows[0].get("RELATIONSHIP_STATUS") or "").strip()
+        from_name = str(rows[0].get("FIRST_NAME") or "").strip()
+    if status not in RELATIONSHIP_STATUS_KEYS or status in RELATIONSHIP_STATUS_SOLO:
+        # Linking implies a partnered status; default if requester was solo/missing.
+        status = "coupled_up"
+    open_to = False
+    visibility = compute_profile_visibility(status, open_to)
+
+    # Best-effort write onto accepter if they already have a profile row.
+    try:
+        execute_write(
+            f"""
+            update {user_profiles_table()}
+            set relationship_status = %s,
+                open_to_dates = %s,
+                profile_visibility = %s,
+                updated_at = NOW()
+            where lower(user_email) = lower(%s)
+            """,
+            [status, open_to, visibility, _norm_email(to_email)],
+        )
+        clear_profile_cache()
+    except Exception:
+        pass
+
+    return {
+        "RELATIONSHIP_STATUS": status,
+        "OPEN_TO_DATES": open_to,
+        "PROFILE_VISIBILITY": visibility,
+        "FROM_NAME": from_name,
+        "FROM_EMAIL": _norm_email(from_email),
+    }
 
 
 def unlink_partner(email: str) -> None:

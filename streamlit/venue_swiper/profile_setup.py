@@ -50,6 +50,7 @@ STEP_KEY = "profile_setup_step"
 PREVIEW_OPEN_KEY = "apres_profile_preview_open"
 PREVIEW_IDX_KEY = "apres_preview_photo_idx"
 PARTNER_PREVIEW_KEY = "apres_partner_preview_open"
+SETUP_PARTNER_DIALOG_KEY = "apres_setup_partner_dialog"
 PROFILE_FLASH_KEY = "apres_profile_flash"
 
 
@@ -1148,6 +1149,7 @@ def _render_step_activities(draft: dict[str, Any]) -> None:
             return
         draft["activity_preferences"] = list(selected)
         _save_draft(draft)
+        st.session_state.pop(SETUP_PARTNER_DIALOG_KEY, None)
         st.session_state[STEP_KEY] = 5
         st.rerun()
 
@@ -1206,9 +1208,107 @@ def _render_connection_controls(
     return status, open_to, partner_email
 
 
+def _dismiss_setup_partner_dialog() -> None:
+    st.session_state[SETUP_PARTNER_DIALOG_KEY] = False
+
+
+@st.dialog("Partner request", width="small", on_dismiss=_dismiss_setup_partner_dialog)
+def _open_setup_partner_request_dialog(
+    email: str,
+    draft: dict[str, Any],
+    request: dict[str, Any],
+) -> None:
+    """Popup on setup step 5 when someone already invited this email."""
+    from_email = str(request.get("FROM_EMAIL") or "")
+    rid = str(request.get("REQUEST_ID") or "")
+    other = fetch_profile(from_email, include_photo=False) or {}
+    name = (other.get("FIRST_NAME") or "").strip() or from_email
+    their_status = str(other.get("RELATIONSHIP_STATUS") or "").strip()
+    status_label = RELATIONSHIP_STATUS_LABELS.get(their_status, "Coupled up")
+    if their_status in RELATIONSHIP_STATUS_SOLO or their_status not in RELATIONSHIP_STATUS_KEYS:
+        status_label = RELATIONSHIP_STATUS_LABELS["coupled_up"]
+
+    st.markdown(f"**{escape(name)}** wants to link with you on Après.")
+    st.caption(f"{escape(from_email)}")
+    st.info(
+        f"Accepting links your accounts and sets your status to “{status_label}” "
+        "to match theirs."
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Accept", type="primary", use_container_width=True, key="setup_accept_partner"):
+            try:
+                result = respond_to_partner_request(email, rid, accept=True)
+                draft["relationship_status"] = result.get("RELATIONSHIP_STATUS") or "coupled_up"
+                draft["open_to_dates"] = False
+                draft["partner_email_draft"] = ""
+                draft["linked_during_setup"] = True
+                draft["linked_partner_email"] = result.get("FROM_EMAIL") or from_email
+                _save_draft(draft)
+                mark_notifications_read(email)
+                st.session_state[SETUP_PARTNER_DIALOG_KEY] = False
+                st.session_state[PROFILE_FLASH_KEY] = (
+                    f"Linked with {result.get('FROM_NAME') or from_email}. "
+                    f"Status set to {RELATIONSHIP_STATUS_LABELS.get(str(result.get('RELATIONSHIP_STATUS')), 'Coupled up')}."
+                )
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001
+                st.error(str(exc))
+    with c2:
+        if st.button("Decline", use_container_width=True, key="setup_decline_partner"):
+            try:
+                respond_to_partner_request(email, rid, accept=False)
+                mark_notifications_read(email)
+                st.session_state[SETUP_PARTNER_DIALOG_KEY] = False
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001
+                st.error(str(exc))
+
+
 def _render_step_connection(draft: dict[str, Any], email: str) -> None:
     st.markdown('<div class="section-label">Connection</div>', unsafe_allow_html=True)
     st.caption("How you show up — and who you’re with.")
+
+    flash = st.session_state.pop(PROFILE_FLASH_KEY, None)
+    if flash:
+        st.success(flash)
+
+    inbound = list_pending_inbound(email)
+    # Auto-open popup once per visit to step 5 when a request is waiting.
+    if inbound and SETUP_PARTNER_DIALOG_KEY not in st.session_state:
+        st.session_state[SETUP_PARTNER_DIALOG_KEY] = True
+    if inbound and st.session_state.get(SETUP_PARTNER_DIALOG_KEY):
+        _open_setup_partner_request_dialog(email, draft, inbound[0])
+    elif inbound:
+        from_email = str(inbound[0].get("FROM_EMAIL") or "")
+        st.warning(f"You have a partner request from {from_email}.")
+        if st.button("Review partner request", key="setup_reopen_partner_req"):
+            st.session_state[SETUP_PARTNER_DIALOG_KEY] = True
+            st.rerun()
+
+    partner = get_linked_partner(email)
+    if partner or draft.get("linked_during_setup"):
+        partner = partner or str(draft.get("linked_partner_email") or "")
+        status = str(draft.get("relationship_status") or "").strip() or "coupled_up"
+        label = RELATIONSHIP_STATUS_LABELS.get(status, status)
+        st.success(
+            f"Linked with **{partner}**. Your status is **{label}** "
+            "(matched to your partner)."
+        )
+        st.caption("You can finish setup now — or change status later in Profile.")
+        back, nxt = _nav(next_label="Finish & start exploring", next_key="profile_step5_linked")
+        if back:
+            _save_draft(draft)
+            st.session_state[STEP_KEY] = 4
+            st.rerun()
+        if nxt:
+            draft["relationship_status"] = status
+            draft["open_to_dates"] = False
+            draft["partner_email_draft"] = ""
+            _save_draft(draft)
+            _persist_complete(email, draft)
+        return
+
     status, open_to, partner_email = _render_connection_controls(draft, key_prefix="pf")
 
     back, nxt = _nav(next_label="Finish & start exploring", next_key="profile_step5")
