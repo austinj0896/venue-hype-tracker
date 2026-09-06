@@ -1176,28 +1176,6 @@ div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
         font-size: 15px;
     }}
 }}
-/* Phones: keep the UI portrait even when the device is landscape. */
-@media screen and (max-width: 950px) and (orientation: landscape) and (hover: none) {{
-    html {{
-        transform: rotate(-90deg);
-        transform-origin: left top;
-        width: 100vh;
-        height: 100vw;
-        overflow-x: hidden;
-        position: absolute;
-        top: 100%;
-        left: 0;
-    }}
-    body {{
-        min-height: 100vw;
-        width: 100vh;
-        overflow-x: hidden;
-    }}
-    .stApp, [data-testid="stAppViewContainer"] {{
-        min-height: 100vw !important;
-        width: 100vh !important;
-    }}
-}}
 @media (prefers-reduced-motion: reduce) {{
     *, *::before, *::after {{
         animation-duration: 0.01ms !important;
