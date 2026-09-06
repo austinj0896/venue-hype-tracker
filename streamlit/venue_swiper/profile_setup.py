@@ -334,11 +334,9 @@ def render_profile_preview_card(
             f'<span class="preview-seg{" on" if i == idx else ""}"></span>' for i in range(n)
         )
         seg_html = f'<div class="preview-segments" aria-hidden="true">{segments}</div>'
-        count_html = f'<div class="preview-count">{idx + 1} / {n}</div>'
     else:
         img_html = '<div class="preview-photo preview-photo-empty">Add photos to fill this card</div>'
         seg_html = ""
-        count_html = ""
 
     diet_html = _chips_html([d for d in dietary if d and d != "None"]) or (
         '<span class="preview-chip muted">Open to anything</span>'
@@ -355,8 +353,32 @@ def render_profile_preview_card(
           <div class="preview-photo-stage">
             {seg_html}
             {img_html}
-            {count_html}
           </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if n > 1:
+        left, right = st.columns(2, gap="small")
+        with left:
+            if st.button(
+                "\u200b",
+                key="preview_tap_left",
+                use_container_width=True,
+            ):
+                st.session_state[PREVIEW_IDX_KEY] = (idx - 1) % n
+                st.rerun()
+        with right:
+            if st.button(
+                "\u200b",
+                key="preview_tap_right",
+                use_container_width=True,
+            ):
+                st.session_state[PREVIEW_IDX_KEY] = (idx + 1) % n
+                st.rerun()
+
+    st.markdown(
+        f"""
           <div class="preview-body">
             <div class="preview-eyebrow">How others see you</div>
             <div class="preview-name">{title}</div>
@@ -370,18 +392,6 @@ def render_profile_preview_card(
         """,
         unsafe_allow_html=True,
     )
-
-    if n > 1:
-        left, right = st.columns(2)
-        with left:
-            if st.button("‹  Previous photo", use_container_width=True, key="preview_prev"):
-                st.session_state[PREVIEW_IDX_KEY] = (idx - 1) % n
-                st.rerun()
-        with right:
-            if st.button("Next photo  ›", use_container_width=True, key="preview_next"):
-                st.session_state[PREVIEW_IDX_KEY] = (idx + 1) % n
-                st.rerun()
-    st.caption("Tap previous / next to flip through photos — same idea as Tinder or Bumble.")
 
 
 def _progress_html(step: int, total: int = 4) -> str:
@@ -518,6 +528,50 @@ def profile_setup_css() -> str:
     height: min(62vh, 420px);
     object-fit: cover;
     display: block;
+    pointer-events: none;
+    user-select: none;
+}
+/* Tap zones: the column row directly under the photo stage markdown */
+div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] {
+    margin-top: calc(-1 * min(62vh, 420px)) !important;
+    margin-bottom: 0 !important;
+    height: min(62vh, 420px);
+    position: relative;
+    z-index: 12;
+    gap: 0 !important;
+}
+div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] > div {
+    padding: 0 !important;
+}
+div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] .stButton {
+    height: 100%;
+}
+div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] .stButton > button {
+    height: min(62vh, 420px) !important;
+    min-height: min(62vh, 420px) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: transparent !important;
+    cursor: pointer;
+}
+div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"]
+  > div:first-child .stButton > button:hover {
+    background: linear-gradient(90deg, rgba(248,230,210,0.14), transparent 72%) !important;
+}
+div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"]
+  > div:last-child .stButton > button:hover {
+    background: linear-gradient(270deg, rgba(248,230,210,0.14), transparent 72%) !important;
+}
+div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"]
+  .stButton > button:focus {
+    outline: none !important;
+    box-shadow: none !important;
+}
+/* Body markdown closes the card visually under the overlay */
+div[data-testid="stMarkdown"]:has(.preview-body) {
+    position: relative;
+    z-index: 2;
 }
 .preview-photo-empty {
     display: flex;
