@@ -827,9 +827,6 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
     st.rerun()
 
 
-PROFILE_FLASH_KEY = "apres_profile_flash"
-
-
 def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     """Edit surface for users who already completed basic setup."""
     st.markdown(f"<style>{profile_setup_css()}</style>", unsafe_allow_html=True)
