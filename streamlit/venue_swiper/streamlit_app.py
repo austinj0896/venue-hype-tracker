@@ -49,7 +49,7 @@ from geo import filter_by_radius, miles_to_meters
 from location_ui import render_location_picker
 from places_data import fetch_community_ratings, fetch_venues_with_coords
 from profile_setup import render_profile_settings, render_profile_setup
-from user_profiles_store import fetch_profile, is_profile_complete
+from user_profiles_store import fetch_profile, is_profile_complete, photo_data_uri
 from planned_dates_store import fetch_planned_dates, save_planned_date
 
 DEFAULT_BOROUGH = "Manhattan Beach"
@@ -93,13 +93,24 @@ ALLOWED_PRIMARY_TYPES = (
     "thai_restaurant",
 )
 
-FONT_SERIF = "Georgia, 'Times New Roman', serif"
-FONT_SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+FONT_SERIF = "'Cormorant Garamond', Georgia, 'Times New Roman', serif"
+FONT_SANS = "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+FONT_URL = (
+    "https://fonts.googleapis.com/css2?"
+    "family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&"
+    "family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&"
+    "display=swap"
+)
 
-# SiS strips <link> tags and often breaks <style> inside st.markdown — inject via components.html.
+# SiS strips <link> tags and often breaks <style> inside st.markdown — inject via iframe + markdown.
 APRES_CSS = f"""
+@import url('{FONT_URL}');
 :root {{
     --cream: #F8E6D2;
+    --cream-deep: #F0D7BC;
+    --cream-soft: #FBF1E6;
+    --surface: rgba(255, 252, 247, 0.82);
+    --surface-solid: #FFFCF7;
     --brown: #704D3B;
     --gold: #D3A345;
     --steel: #7897A3;
@@ -107,18 +118,47 @@ APRES_CSS = f"""
     --text-dark: #2C1A10;
     --text-mid: #7A5B48;
     --text-light: #B09080;
+    --hairline: rgba(112, 77, 59, 0.12);
+    --hairline-strong: rgba(112, 77, 59, 0.18);
+    --shadow-sm: 0 1px 2px rgba(44, 26, 16, 0.04), 0 4px 12px rgba(44, 26, 16, 0.05);
+    --shadow-md: 0 2px 4px rgba(44, 26, 16, 0.04), 0 12px 28px rgba(44, 26, 16, 0.08);
+    --shadow-lg: 0 4px 8px rgba(44, 26, 16, 0.05), 0 24px 48px rgba(44, 26, 16, 0.12);
+    --radius-sm: 10px;
+    --radius-md: 14px;
+    --radius-lg: 20px;
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.25rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-inout: cubic-bezier(0.45, 0, 0.55, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --dur-fast: 160ms;
+    --dur: 280ms;
+    --dur-slow: 520ms;
 }}
 html, body, [class*="css"] {{
     font-family: {FONT_SANS};
     color: var(--text-dark);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
 }}
 .stApp {{
-    background: var(--cream);
+    background:
+        radial-gradient(120% 80% at 100% -10%, rgba(211, 163, 69, 0.14) 0%, transparent 52%),
+        radial-gradient(90% 60% at -10% 100%, rgba(112, 77, 59, 0.08) 0%, transparent 48%),
+        linear-gradient(180deg, var(--cream-soft) 0%, var(--cream) 42%, var(--cream-deep) 100%);
+    background-attachment: fixed;
 }}
 .block-container {{
-    padding-top: 1.25rem;
-    padding-bottom: 2rem;
+    padding-top: var(--space-5);
+    padding-bottom: var(--space-8);
     max-width: 480px;
+    animation: apres-page-in var(--dur-slow) var(--ease-out) both;
 }}
 header[data-testid="stHeader"] {{
     background: transparent;
@@ -130,6 +170,7 @@ h1, h2, h3 {{
     font-family: {FONT_SERIF} !important;
     font-weight: 400 !important;
     color: var(--brown) !important;
+    letter-spacing: -0.01em;
 }}
 .apres-status {{
     display: flex;
@@ -138,108 +179,154 @@ h1, h2, h3 {{
     font-size: 11px;
     font-weight: 500;
     color: var(--brown);
-    letter-spacing: 0.05em;
-    margin-bottom: 1rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: var(--space-4);
+    animation: apres-fade-up var(--dur-slow) var(--ease-out) both;
 }}
 .apres-status .tagline {{
     font-family: {FONT_SERIF};
-    font-size: 13px;
+    font-size: 14px;
     font-style: italic;
-    letter-spacing: 0;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    color: var(--text-mid);
 }}
 .apres-greeting {{
     font-family: {FONT_SERIF};
-    font-size: 30px;
-    font-weight: 300;
+    font-size: clamp(28px, 7vw, 34px);
+    font-weight: 400;
     font-style: italic;
     color: var(--brown);
-    line-height: 1.2;
-    margin: 0 0 0.25rem 0;
+    line-height: 1.18;
+    letter-spacing: -0.015em;
+    margin: 0 0 var(--space-1) 0;
+    animation: apres-fade-up var(--dur-slow) var(--ease-out) 0.06s both;
+}}
+.apres-avatar {{
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1.5px solid rgba(211, 163, 69, 0.55);
+    box-shadow: var(--shadow-sm), 0 0 0 4px rgba(248, 230, 210, 0.65);
+    flex-shrink: 0;
+    transition: transform var(--dur) var(--ease-spring), box-shadow var(--dur) var(--ease-inout);
+}}
+.apres-avatar:hover {{
+    transform: scale(1.04);
+    box-shadow: var(--shadow-md), 0 0 0 5px rgba(211, 163, 69, 0.18);
+}}
+.apres-greeting-row {{
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin: 0 0 var(--space-1) 0;
+    animation: apres-fade-up var(--dur-slow) var(--ease-out) 0.06s both;
+}}
+.apres-greeting-row .apres-greeting {{
+    margin: 0;
+    animation: none;
 }}
 .apres-sub {{
     font-size: 11px;
     color: var(--text-light);
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    margin-bottom: 1.25rem;
+    margin-bottom: var(--space-5);
+    animation: apres-fade-up var(--dur-slow) var(--ease-out) 0.1s both;
 }}
 .section-label {{
     font-size: 10px;
-    letter-spacing: 0.12em;
+    font-weight: 500;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--text-light);
-    margin: 0.5rem 0 0.75rem;
+    margin: var(--space-5) 0 var(--space-3);
 }}
 .date-card {{
-    background: var(--brown);
-    border-radius: 20px;
-    padding: 1.35rem 1.25rem 1.15rem;
+    background:
+        linear-gradient(165deg, rgba(211,163,69,0.14) 0%, transparent 36%),
+        linear-gradient(180deg, #7A5643 0%, var(--brown) 55%, #5E3F31 100%);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(248, 230, 210, 0.08);
+    padding: 1.45rem 1.3rem 1.25rem;
     position: relative;
     overflow: hidden;
-    margin-bottom: 0.75rem;
+    margin-bottom: var(--space-3);
     min-height: 280px;
+    box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(248, 230, 210, 0.1);
+    animation: apres-card-in var(--dur-slow) var(--ease-out) both;
+    transform: translateZ(0);
+    will-change: transform, opacity;
 }}
 .date-card::before {{
     content: '';
     position: absolute;
-    top: -40px; right: -40px;
-    width: 140px; height: 140px;
+    top: -48px; right: -36px;
+    width: 160px; height: 160px;
     border-radius: 50%;
-    background: rgba(211,163,69,0.12);
+    background: radial-gradient(circle, rgba(211,163,69,0.22) 0%, transparent 68%);
     pointer-events: none;
 }}
 .date-card::after {{
     content: '';
     position: absolute;
-    bottom: -20px; left: 40px;
-    width: 80px; height: 80px;
+    bottom: -28px; left: 28px;
+    width: 110px; height: 110px;
     border-radius: 50%;
-    background: rgba(248,230,210,0.05);
+    background: radial-gradient(circle, rgba(248,230,210,0.08) 0%, transparent 70%);
     pointer-events: none;
 }}
 .date-card-label {{
     font-size: 10px;
-    letter-spacing: 0.14em;
+    font-weight: 500;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--sage);
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
     position: relative;
 }}
 .date-card-title {{
     font-family: {FONT_SERIF};
-    font-size: 28px;
-    font-weight: 400;
+    font-size: clamp(26px, 6.5vw, 30px);
+    font-weight: 500;
     color: var(--cream);
-    margin-bottom: 4px;
-    line-height: 1.15;
+    margin-bottom: 0.35rem;
+    line-height: 1.12;
+    letter-spacing: -0.01em;
     position: relative;
 }}
 .date-card-meta {{
-    font-size: 12px;
-    color: rgba(248,230,210,0.55);
-    margin-bottom: 14px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: rgba(248,230,210,0.58);
+    margin-bottom: var(--space-4);
     position: relative;
 }}
 .date-card-pills {{
     position: relative;
-    margin-bottom: 12px;
+    margin-bottom: var(--space-3);
 }}
 .date-card-pills span {{
     display: inline-block;
-    background: rgba(248,230,210,0.12);
-    border: 0.5px solid rgba(248,230,210,0.18);
+    background: rgba(248,230,210,0.1);
+    border: 1px solid rgba(248,230,210,0.16);
     border-radius: 999px;
-    padding: 0.2rem 0.55rem;
+    padding: 0.28rem 0.65rem;
     margin: 0.15rem 0.35rem 0.15rem 0;
     font-size: 10px;
-    letter-spacing: 0.06em;
+    font-weight: 500;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--sage);
+    transition: background var(--dur-fast) var(--ease-inout), border-color var(--dur-fast) var(--ease-inout);
 }}
 .vibe-rail {{
     position: relative;
-    margin: 0.15rem 0 1rem;
-    padding-top: 0.55rem;
+    margin: 0.15rem 0 var(--space-4);
+    padding-top: 0.65rem;
 }}
 .vibe-rail::before {{
     content: '';
@@ -263,6 +350,7 @@ h1, h2, h3 {{
     align-items: center;
     gap: 0.4rem;
     font-size: 9px;
+    font-weight: 500;
     letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--gold);
@@ -302,14 +390,14 @@ h1, h2, h3 {{
     box-shadow:
         inset 0 1px 0 rgba(248,230,210,0.18),
         0 6px 16px rgba(44,26,16,0.22);
-    animation: vibe-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: vibe-rise 0.55s var(--ease-out) both;
     transform-origin: left center;
     transition:
-        transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-        box-shadow 0.22s ease,
-        border-color 0.22s ease,
-        background 0.22s ease,
-        color 0.22s ease;
+        transform var(--dur) var(--ease-spring),
+        box-shadow var(--dur) var(--ease-inout),
+        border-color var(--dur) var(--ease-inout),
+        background var(--dur) var(--ease-inout),
+        color var(--dur) var(--ease-inout);
     z-index: 1;
 }}
 .vibe-tag::before {{
@@ -320,7 +408,7 @@ h1, h2, h3 {{
     background: var(--gold);
     box-shadow: 0 0 8px rgba(211,163,69,0.85);
     flex-shrink: 0;
-    transition: transform 0.22s ease, box-shadow 0.22s ease;
+    transition: transform var(--dur) var(--ease-spring), box-shadow var(--dur) var(--ease-inout);
 }}
 .vibe-tag:hover,
 .vibe-tag:focus-visible {{
@@ -377,22 +465,53 @@ h1, h2, h3 {{
         filter: none;
     }}
 }}
+@keyframes apres-fade-up {{
+    from {{ opacity: 0; transform: translateY(10px); }}
+    to {{ opacity: 1; transform: translateY(0); }}
+}}
+@keyframes apres-page-in {{
+    from {{ opacity: 0; transform: translateY(6px); }}
+    to {{ opacity: 1; transform: translateY(0); }}
+}}
+@keyframes apres-card-in {{
+    from {{
+        opacity: 0;
+        transform: translateY(16px) scale(0.985);
+        filter: blur(3px);
+    }}
+    to {{
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: none;
+    }}
+}}
+@keyframes apres-shimmer {{
+    0% {{ background-position: 200% 0; }}
+    100% {{ background-position: -200% 0; }}
+}}
+@keyframes apres-bar-fill {{
+    from {{ transform: scaleX(0); }}
+    to {{ transform: scaleX(1); }}
+}}
 .vibe-empty {{
-    font-size: 11px;
+    font-family: {FONT_SERIF};
+    font-size: 13px;
     font-style: italic;
-    color: rgba(248,230,210,0.38);
+    color: rgba(248,230,210,0.42);
     letter-spacing: 0.02em;
 }}
 .hours-rail {{
     position: relative;
-    margin: 0 0 0.85rem;
-    padding: 0.55rem 0.7rem 0.65rem;
-    border-radius: 10px;
-    background: rgba(248,230,210,0.05);
-    border: 0.5px solid rgba(211,163,69,0.22);
+    margin: 0 0 0.9rem;
+    padding: 0.65rem 0.8rem 0.7rem;
+    border-radius: var(--radius-sm);
+    background: rgba(248,230,210,0.06);
+    border: 1px solid rgba(211,163,69,0.2);
+    backdrop-filter: blur(6px);
 }}
 .hours-rail-label {{
     font-size: 9px;
+    font-weight: 500;
     letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--gold);
@@ -410,7 +529,7 @@ h1, h2, h3 {{
 }}
 .hours-week {{
     font-size: 11px;
-    line-height: 1.45;
+    line-height: 1.5;
     color: rgba(248,230,210,0.55);
     white-space: pre-line;
 }}
@@ -430,76 +549,129 @@ h1, h2, h3 {{
     position: relative;
     z-index: 3;
     cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-inout);
 }}
 .date-card-footer a:hover {{
-    text-decoration: underline;
     color: #F8E6D2;
 }}
 .swipe-hint {{
     text-align: center;
     color: var(--text-light);
     font-size: 12px;
-    letter-spacing: 0.04em;
-    margin: 0.35rem 0 0.85rem;
+    letter-spacing: 0.05em;
+    line-height: 1.5;
+    margin: var(--space-2) 0 var(--space-4);
 }}
 .progress-track {{
     width: 100%;
-    background: rgba(112,77,59,0.12);
-    border-radius: 4px;
-    height: 3px;
+    background: rgba(112,77,59,0.1);
+    border-radius: 999px;
+    height: 4px;
     overflow: hidden;
-    margin: 0.25rem 0 1.25rem;
+    margin: 0.25rem 0 var(--space-5);
+    box-shadow: inset 0 1px 1px rgba(44, 26, 16, 0.04);
 }}
 .progress-bar {{
     height: 100%;
-    background: var(--gold);
-    border-radius: 4px;
+    transform-origin: left center;
+    background:
+        linear-gradient(90deg, #C4923A 0%, var(--gold) 45%, #E0B85C 100%);
+    background-size: 200% 100%;
+    border-radius: 999px;
+    animation:
+        apres-bar-fill var(--dur-slow) var(--ease-out) both,
+        apres-shimmer 2.8s var(--ease-inout) 0.6s infinite;
 }}
 .progress-caption {{
     font-size: 11px;
     color: var(--text-light);
-    letter-spacing: 0.06em;
-    margin-bottom: 0.35rem;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.4rem;
 }}
-.login-panel {{
-    background: white;
-    border-radius: 16px;
-    border: 0.5px solid rgba(112,77,59,0.12);
-    padding: 1.25rem 1.1rem;
-    margin: 0.75rem 0 1rem;
+.login-panel,
+.empty-state {{
+    background: var(--surface);
+    backdrop-filter: blur(14px) saturate(1.1);
+    -webkit-backdrop-filter: blur(14px) saturate(1.1);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-sm);
+    padding: 1.4rem 1.2rem;
+    margin: var(--space-3) 0 var(--space-4);
+    animation: apres-fade-up var(--dur-slow) var(--ease-out) both;
 }}
-.login-panel p {{
-    font-size: 13px;
+.login-panel p,
+.empty-state p {{
+    font-size: 14px;
     color: var(--text-mid);
-    line-height: 1.55;
+    line-height: 1.65;
     margin: 0;
 }}
+.empty-state-eyebrow {{
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0 0 var(--space-2);
+}}
+.empty-state-title {{
+    font-family: {FONT_SERIF};
+    font-size: 24px;
+    font-weight: 500;
+    font-style: italic;
+    color: var(--brown);
+    line-height: 1.2;
+    margin: 0 0 var(--space-2);
+}}
+.empty-state-mark {{
+    width: 36px;
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--gold), transparent);
+    margin: 0 0 var(--space-3);
+}}
 .bucket-card {{
-    background: white;
-    border-radius: 16px;
-    border: 0.5px solid rgba(112,77,59,0.12);
-    padding: 16px 18px;
-    margin-bottom: 10px;
+    background: var(--surface-solid);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-sm);
+    padding: 1.05rem 1.15rem;
+    margin-bottom: 0.75rem;
+    transition:
+        transform var(--dur) var(--ease-out),
+        box-shadow var(--dur) var(--ease-inout),
+        border-color var(--dur) var(--ease-inout);
+    animation: apres-fade-up var(--dur-slow) var(--ease-out) both;
+}}
+.bucket-card:hover {{
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+    border-color: rgba(211, 163, 69, 0.28);
 }}
 .bucket-title {{
     font-family: {FONT_SERIF};
-    font-size: 20px;
+    font-size: 21px;
+    font-weight: 500;
     color: var(--brown);
-    margin-bottom: 2px;
+    margin-bottom: 0.2rem;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
 }}
 .bucket-sub {{
     font-size: 12px;
+    line-height: 1.45;
     color: var(--text-light);
-    margin-bottom: 6px;
+    margin-bottom: 0.55rem;
 }}
 .bucket-score {{
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    background: rgba(211,163,69,0.14);
-    border: 0.5px solid rgba(211,163,69,0.35);
-    border-radius: 20px;
-    padding: 5px 14px;
+    background: rgba(211,163,69,0.12);
+    border: 1px solid rgba(211,163,69,0.28);
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
     font-size: 13px;
     color: var(--brown);
     font-weight: 500;
@@ -513,53 +685,65 @@ h1, h2, h3 {{
     align-items: center;
     justify-content: center;
     width: 36px; height: 36px;
-    border-radius: 10px;
+    border-radius: var(--radius-sm);
     background: rgba(120,151,163,0.14);
     color: var(--steel);
     font-size: 14px;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
 }}
 .date-plan-card {{
-    background: white;
-    border-radius: 16px;
-    border: 0.5px solid rgba(112,77,59,0.12);
-    padding: 14px 16px;
-    margin-bottom: 12px;
+    background: var(--surface-solid);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-sm);
+    padding: 1rem 1.1rem;
+    margin-bottom: 0.85rem;
+    transition: box-shadow var(--dur) var(--ease-inout), transform var(--dur) var(--ease-out);
+    animation: apres-fade-up var(--dur-slow) var(--ease-out) both;
+}}
+.date-plan-card:hover {{
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
 }}
 .date-plan-header {{
     font-family: {FONT_SERIF};
-    font-size: 18px;
+    font-size: 19px;
+    font-weight: 500;
     color: var(--brown);
-    margin-bottom: 10px;
+    margin-bottom: 0.75rem;
+    letter-spacing: -0.01em;
 }}
 .date-plan-stop {{
-    padding: 10px 0;
-    border-bottom: 0.5px solid rgba(112,77,59,0.08);
+    padding: 0.7rem 0;
+    border-bottom: 1px solid rgba(112,77,59,0.08);
 }}
 .date-plan-stop:last-of-type {{
     border-bottom: none;
 }}
 .date-plan-stop-num {{
     font-size: 10px;
-    letter-spacing: 0.12em;
+    font-weight: 500;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--gold);
-    margin-bottom: 2px;
+    margin-bottom: 0.2rem;
 }}
 .date-plan-stop-name {{
     font-family: {FONT_SERIF};
     font-size: 17px;
     color: var(--brown);
+    line-height: 1.25;
 }}
 .date-plan-stop-meta {{
     font-size: 11px;
+    line-height: 1.45;
     color: var(--text-light);
 }}
 .date-plan-walk {{
     text-align: center;
     font-size: 12px;
     color: var(--steel);
-    padding: 8px 0;
+    padding: 0.65rem 0;
     letter-spacing: 0.04em;
 }}
 .date-plan-walk-time {{
@@ -568,17 +752,27 @@ h1, h2, h3 {{
 }}
 .location-mode-row div[data-testid="stRadio"] > div {{
     flex-direction: row;
-    gap: 0.35rem;
+    gap: 0.4rem;
 }}
 .location-mode-row div[data-testid="stRadio"] label {{
-    background: white;
-    border: 0.5px solid rgba(112,77,59,0.14);
+    background: var(--surface-solid);
+    border: 1px solid var(--hairline);
     border-radius: 999px;
-    padding: 0.35rem 0.85rem !important;
+    padding: 0.4rem 0.9rem !important;
     font-size: 12px !important;
     letter-spacing: 0.04em;
     text-transform: none !important;
     color: var(--text-mid) !important;
+    box-shadow: var(--shadow-sm);
+    transition:
+        background var(--dur) var(--ease-inout),
+        color var(--dur) var(--ease-inout),
+        border-color var(--dur) var(--ease-inout),
+        transform var(--dur-fast) var(--ease-spring);
+}}
+.location-mode-row div[data-testid="stRadio"] label:hover {{
+    border-color: rgba(211, 163, 69, 0.35);
+    transform: translateY(-1px);
 }}
 .location-mode-row div[data-testid="stRadio"] label[data-checked="true"] {{
     background: var(--brown);
@@ -588,15 +782,17 @@ h1, h2, h3 {{
 .location-set-pill {{
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    background: white;
-    border: 0.5px solid rgba(112,77,59,0.12);
+    gap: 0.4rem;
+    background: var(--surface);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--hairline);
     border-radius: 999px;
-    padding: 0.45rem 0.9rem;
+    padding: 0.5rem 0.95rem;
     font-size: 12px;
     color: var(--text-mid);
     letter-spacing: 0.03em;
-    margin: 0.15rem 0 0.85rem;
+    margin: 0.15rem 0 0.9rem;
+    box-shadow: var(--shadow-sm);
 }}
 .location-set-pill strong {{
     color: var(--brown);
@@ -608,84 +804,151 @@ h1, h2, h3 {{
     border-radius: 50%;
     background: var(--gold);
     display: inline-block;
+    box-shadow: 0 0 0 3px rgba(211, 163, 69, 0.18);
 }}
 iframe[title="streamlit_folium.streamlit_folium"] {{
-    border-radius: 16px !important;
-    border: 0.5px solid rgba(112,77,59,0.14) !important;
-    box-shadow: 0 8px 24px rgba(44,26,16,0.06);
+    border-radius: var(--radius-md) !important;
+    border: 1px solid var(--hairline) !important;
+    box-shadow: var(--shadow-md);
 }}
 iframe[title="apres_geolocation.apres_geolocation"] {{
     min-height: 56px !important;
     height: 56px !important;
     width: 100% !important;
-    border-radius: 12px !important;
+    border-radius: var(--radius-sm) !important;
     border: none !important;
     background: transparent !important;
     display: block !important;
 }}
 .stars-preview {{
     font-family: {FONT_SERIF};
-    font-size: 22px;
+    font-size: 24px;
     color: var(--gold);
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     text-align: center;
-    margin: 0.15rem 0 0.5rem;
+    margin: 0.2rem 0 0.65rem;
+    transition: transform var(--dur-fast) var(--ease-spring);
+}}
+div[data-testid="stTabs"] {{
+    margin-top: var(--space-2);
+}}
+div[data-testid="stTabs"] [data-baseweb="tab-list"] {{
+    gap: 0.15rem;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 0;
 }}
 div[data-testid="stTabs"] button {{
-    font-family: {FONT_SANS};
-    font-size: 12px;
-    letter-spacing: 0.06em;
-    color: var(--text-light);
+    font-family: {FONT_SANS} !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.06em !important;
+    color: var(--text-light) !important;
+    transition: color var(--dur) var(--ease-inout) !important;
 }}
 div[data-testid="stTabs"] button[aria-selected="true"] {{
-    color: var(--brown);
+    color: var(--brown) !important;
+}}
+div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
+    background-color: var(--gold) !important;
+    height: 2px !important;
 }}
 div[data-testid="stSlider"] label,
-div[data-testid="stForm"] label {{
+div[data-testid="stForm"] label,
+div[data-testid="stTextInput"] label,
+div[data-testid="stSelectbox"] label,
+div[data-testid="stMultiSelect"] label {{
     font-size: 10px !important;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+    font-weight: 500 !important;
+    letter-spacing: 0.12em !important;
+    text-transform: uppercase !important;
     color: var(--text-light) !important;
 }}
-div[data-testid="stTextInput"] input {{
-    border-radius: 12px;
-    border: 0.5px solid rgba(112,77,59,0.18);
-    background: white;
-    color: var(--text-dark);
+div[data-testid="stTextInput"] input,
+div[data-testid="stSelectbox"] > div > div,
+div[data-testid="stMultiSelect"] > div > div {{
+    border-radius: var(--radius-sm) !important;
+    border: 1px solid var(--hairline-strong) !important;
+    background: var(--surface-solid) !important;
+    color: var(--text-dark) !important;
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--dur) var(--ease-inout), box-shadow var(--dur) var(--ease-inout) !important;
 }}
-div[data-testid="stBaseButton-secondary"] button {{
-    background: transparent !important;
-    color: var(--text-mid) !important;
-    border: 0.5px solid rgba(112,77,59,0.25) !important;
-    border-radius: 14px !important;
+div[data-testid="stTextInput"] input:focus {{
+    border-color: rgba(211, 163, 69, 0.55) !important;
+    box-shadow: 0 0 0 3px rgba(211, 163, 69, 0.16) !important;
+}}
+div[data-testid="stBaseButton-secondary"] button,
+div[data-testid="stBaseButton-primary"] button,
+div[data-testid="stFormSubmitButton"] button {{
+    border-radius: var(--radius-md) !important;
     font-family: {FONT_SANS} !important;
     font-weight: 500 !important;
-    letter-spacing: 0.04em !important;
+    letter-spacing: 0.05em !important;
+    transition:
+        transform var(--dur-fast) var(--ease-spring) !important,
+        box-shadow var(--dur) var(--ease-inout) !important,
+        background var(--dur) var(--ease-inout) !important,
+        border-color var(--dur) var(--ease-inout) !important,
+        filter var(--dur-fast) var(--ease-inout) !important;
+}}
+div[data-testid="stBaseButton-secondary"] button {{
+    background: rgba(255, 252, 247, 0.55) !important;
+    color: var(--text-mid) !important;
+    border: 1px solid rgba(112,77,59,0.22) !important;
+    backdrop-filter: blur(8px);
+    box-shadow: var(--shadow-sm) !important;
+}}
+div[data-testid="stBaseButton-secondary"] button:hover {{
+    border-color: rgba(112,77,59,0.38) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: var(--shadow-md) !important;
+}}
+div[data-testid="stBaseButton-secondary"] button:active {{
+    transform: translateY(1px) scale(0.985) !important;
 }}
 div[data-testid="stBaseButton-primary"] button,
 div[data-testid="stFormSubmitButton"] button {{
-    background: var(--gold) !important;
+    background: linear-gradient(180deg, #E0B85C 0%, var(--gold) 55%, #C4923A 100%) !important;
     color: var(--brown) !important;
-    border: none !important;
-    border-radius: 14px !important;
-    font-family: {FONT_SANS} !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.04em !important;
+    border: 1px solid rgba(112, 77, 59, 0.08) !important;
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+}}
+div[data-testid="stBaseButton-primary"] button:hover,
+div[data-testid="stFormSubmitButton"] button:hover {{
+    filter: brightness(1.04);
+    transform: translateY(-1px) !important;
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.32) !important;
+}}
+div[data-testid="stBaseButton-primary"] button:active,
+div[data-testid="stFormSubmitButton"] button:active {{
+    transform: translateY(1px) scale(0.985) !important;
+    filter: brightness(0.98);
 }}
 div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(1) {{
-    background: rgba(112,77,59,0.18) !important;
+    background: rgba(112,77,59,0.16) !important;
 }}
 div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(2) {{
-    background: var(--gold) !important;
+    background: linear-gradient(90deg, #C4923A, var(--gold)) !important;
 }}
 div[data-testid="stSlider"] [role="slider"] {{
     background: var(--brown) !important;
     border: 2px solid var(--cream) !important;
-    box-shadow: 0 1px 4px rgba(44,26,16,0.25) !important;
+    box-shadow: 0 2px 8px rgba(44,26,16,0.22) !important;
+    transition: transform var(--dur-fast) var(--ease-spring) !important;
+}}
+div[data-testid="stSlider"] [role="slider"]:active {{
+    transform: scale(1.08) !important;
 }}
 div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
     color: var(--brown) !important;
     font-weight: 600 !important;
+}}
+@media (prefers-reduced-motion: reduce) {{
+    *, *::before, *::after {{
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }}
 }}
 """
 
@@ -709,10 +972,18 @@ def format_price_level(raw: str | None) -> str:
 def inject_styles() -> None:
     # st.html() on Streamlit Cloud does not run parent-document scripts — use st.iframe.
     css_literal = json.dumps(APRES_CSS)
+    font_literal = json.dumps(FONT_URL)
     script = f"""<!DOCTYPE html><html><head></head><body style="margin:0;padding:0;">
     <script>
     (function() {{
         const doc = window.parent.document;
+        if (!doc.getElementById("apres-fonts")) {{
+            const link = doc.createElement("link");
+            link.id = "apres-fonts";
+            link.rel = "stylesheet";
+            link.href = {font_literal};
+            doc.head.appendChild(link);
+        }}
         if (doc.getElementById("apres-styles")) return;
         const el = doc.createElement("style");
         el.id = "apres-styles";
@@ -722,7 +993,23 @@ def inject_styles() -> None:
     </script></body></html>"""
     st.iframe(script, height="content", tab_index=-1)
     # Fallback: styles widgets inside the app iframe when parent injection is blocked.
-    st.markdown(f"<style>{APRES_CSS}</style>", unsafe_allow_html=True)
+    st.markdown(
+        f'<link rel="stylesheet" href="{FONT_URL}" />'
+        f"<style>{APRES_CSS}</style>",
+        unsafe_allow_html=True,
+    )
+
+
+def empty_state_html(*, eyebrow: str, title: str, body: str) -> str:
+    """Designed empty state — single-line HTML for Streamlit markdown safety."""
+    return (
+        f'<div class="empty-state">'
+        f'<div class="empty-state-eyebrow">{escape(eyebrow)}</div>'
+        f'<div class="empty-state-title">{escape(title)}</div>'
+        f'<div class="empty-state-mark"></div>'
+        f"<p>{body}</p>"
+        f"</div>"
+    )
 
 
 def show_data_error(exc: Exception) -> None:
@@ -784,7 +1071,7 @@ def show_data_error(exc: Exception) -> None:
         )
 
 
-def render_apres_header(subtitle: str = "Manhattan Beach") -> None:
+def render_apres_header(subtitle: str = "Manhattan Beach", photo_uri: str | None = None) -> None:
     st.markdown(
         """
         <div class="apres-status">
@@ -795,7 +1082,16 @@ def render_apres_header(subtitle: str = "Manhattan Beach") -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown(f'<p class="apres-greeting">{subtitle}</p>', unsafe_allow_html=True)
+    if photo_uri:
+        st.markdown(
+            f'<div class="apres-greeting-row">'
+            f'<img class="apres-avatar" src="{photo_uri}" alt="" />'
+            f'<p class="apres-greeting">{subtitle}</p>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(f'<p class="apres-greeting">{subtitle}</p>', unsafe_allow_html=True)
 
 
 def render_progress(stats: dict[str, int]) -> None:
@@ -1233,7 +1529,11 @@ def render_planned_dates_list(email: str) -> None:
     st.markdown('<div class="section-label">Your planned dates</div>', unsafe_allow_html=True)
     if not rows:
         st.markdown(
-            '<div class="login-panel"><p>No upcoming dates saved yet.</p></div>',
+            empty_state_html(
+                eyebrow="Your calendar",
+                title="No dates planned yet",
+                body="Build one above — we’ll keep it here when you’re ready to go.",
+            ),
             unsafe_allow_html=True,
         )
         return
@@ -1534,14 +1834,15 @@ def render_login() -> None:
         unsafe_allow_html=True,
     )
     st.markdown(
-        """
-        <div class="login-panel">
-            <p>Swipe through local spots you've tried. Skip anything you haven't visited yet -
-            you can always come back and rate it later.</p>
-            <p style="margin-top:0.75rem;font-size:12px;color:var(--text-light);">
-            Your email saves your personal ratings. No account needed beyond this screen.</p>
-        </div>
-        """,
+        '<div class="empty-state">'
+        '<div class="empty-state-eyebrow">Welcome</div>'
+        '<div class="empty-state-title">Your taste, mapped</div>'
+        '<div class="empty-state-mark"></div>'
+        "<p>Rate places you’ve been. Skip what you haven’t — come back when you have.</p>"
+        '<p style="margin-top:0.75rem;font-size:12px;color:var(--text-light);">'
+        "Email only. No password. Your ratings stay yours."
+        "</p>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -1641,20 +1942,21 @@ def render_discover(email: str) -> None:
     venue = get_discover_venue(email, borough)
     if not venue:
         st.markdown(
-            f"""
-            <div class="login-panel">
-                <p>You're caught up - no unrated venues left in <strong>{borough}</strong>.
-                Pick another location above, or check <strong>My ratings</strong> /
-                <strong>Skipped</strong> for places you've already seen.</p>
-            </div>
-            """,
+            empty_state_html(
+                eyebrow="All caught up",
+                title=f"{borough} is clear",
+                body=(
+                    f"No unrated spots left here. Try another location, "
+                    f"or revisit <strong>My ratings</strong> and <strong>Skipped</strong>."
+                ),
+            ),
             unsafe_allow_html=True,
         )
         return
 
     render_venue_card(venue)
     st.markdown(
-        '<p class="swipe-hint">Skip if you haven\'t been &middot; Rate with half-stars if you have</p>',
+        '<p class="swipe-hint">Skip if you haven\'t been · Rate when you have</p>',
         unsafe_allow_html=True,
     )
 
@@ -1725,7 +2027,11 @@ def render_rated_list(email: str) -> None:
     st.markdown('<div class="section-label">Your ratings</div>', unsafe_allow_html=True)
     if not rows:
         st.markdown(
-            '<div class="login-panel"><p>No ratings yet. Head to <strong>Discover</strong> to rate your first spot.</p></div>',
+            empty_state_html(
+                eyebrow="My ratings",
+                title="Nothing rated yet",
+                body="Head to <strong>Discover</strong> and save your first score.",
+            ),
             unsafe_allow_html=True,
         )
         return
@@ -1796,7 +2102,11 @@ def render_skipped_list(email: str) -> None:
     st.markdown('<div class="section-label">Skipped &middot; not visited yet</div>', unsafe_allow_html=True)
     if not rows:
         st.markdown(
-            '<div class="login-panel"><p>No skipped venues. Use <strong>Discover</strong> to browse new places.</p></div>',
+            empty_state_html(
+                eyebrow="Skipped",
+                title="A clean slate",
+                body="Nothing parked here yet. Skip from <strong>Discover</strong> when you haven’t been.",
+            ),
             unsafe_allow_html=True,
         )
         return
@@ -1879,8 +2189,12 @@ def main() -> None:
 
     first = (profile or {}).get("FIRST_NAME") or ""
     display_name = first or email.split("@")[0].replace(".", " ").title()
+    photo_uri = photo_data_uri(
+        (profile or {}).get("PROFILE_PHOTO_B64"),
+        (profile or {}).get("PROFILE_PHOTO_MIME"),
+    )
 
-    render_apres_header(f"Good evening, {display_name}.")
+    render_apres_header(f"Good evening, {display_name}.", photo_uri=photo_uri)
     st.markdown(
         f'<p class="apres-sub">signed in as {email}</p>',
         unsafe_allow_html=True,

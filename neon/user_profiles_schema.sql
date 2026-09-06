@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     accepted_terms_at     TIMESTAMPTZ NOT NULL,
     marketing_opt_in      BOOLEAN NOT NULL DEFAULT FALSE,
     profile_complete      BOOLEAN NOT NULL DEFAULT FALSE,
+    profile_photo_b64     TEXT,
+    profile_photo_mime    TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

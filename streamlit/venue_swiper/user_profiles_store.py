@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import io
 from datetime import date, datetime
 from typing import Any
 
@@ -10,6 +12,11 @@ import streamlit as st
 from db import backend, execute_write, run_query, user_profiles_table
 
 _SCHEMA_APPLIED_KEY = "_user_profiles_schema_ok"
+
+# Upload/compress limits for profile photos stored in Neon as base64.
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_PHOTO_EDGE = 512
+JPEG_QUALITY = 85
 
 
 def ensure_schema() -> None:
@@ -35,12 +42,22 @@ def ensure_schema() -> None:
             accepted_terms_at     TIMESTAMPTZ NOT NULL,
             marketing_opt_in      BOOLEAN NOT NULL DEFAULT FALSE,
             profile_complete      BOOLEAN NOT NULL DEFAULT FALSE,
+            profile_photo_b64     TEXT,
+            profile_photo_mime    TEXT,
             created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
         [],
     )
+    for col_sql in (
+        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_b64 TEXT",
+        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_photo_mime TEXT",
+    ):
+        try:
+            execute_write(col_sql, [])
+        except Exception:
+            pass
     try:
         execute_write(
             f"CREATE INDEX IF NOT EXISTS idx_user_profiles_complete ON {table} (profile_complete)",
@@ -53,6 +70,41 @@ def ensure_schema() -> None:
     except Exception:
         pass
     st.session_state[_SCHEMA_APPLIED_KEY] = True
+
+
+def prepare_profile_photo(uploaded_file: Any) -> tuple[str, str]:
+    """Resize/compress an uploaded image; return (base64, mime)."""
+    from PIL import Image
+
+    raw = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
+    if not raw:
+        raise ValueError("Empty image file.")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise ValueError("Photo must be under 5 MB.")
+
+    img = Image.open(io.BytesIO(raw))
+    if getattr(img, "n_frames", 1) > 1:
+        img.seek(0)
+    img = img.convert("RGB")
+    img.thumbnail((MAX_PHOTO_EDGE, MAX_PHOTO_EDGE))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
+
+
+def photo_data_uri(b64: str | None, mime: str | None = None) -> str | None:
+    if not b64:
+        return None
+    return f"data:{mime or 'image/jpeg'};base64,{b64}"
+
+
+def photo_bytes(b64: str | None) -> bytes | None:
+    if not b64:
+        return None
+    try:
+        return base64.b64decode(b64)
+    except Exception:
+        return None
 
 
 def _as_list(value: Any) -> list[str]:
@@ -90,6 +142,8 @@ def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "ACCEPTED_TERMS_AT": row.get("ACCEPTED_TERMS_AT"),
         "MARKETING_OPT_IN": bool(row.get("MARKETING_OPT_IN")),
         "PROFILE_COMPLETE": bool(row.get("PROFILE_COMPLETE")),
+        "PROFILE_PHOTO_B64": row.get("PROFILE_PHOTO_B64") or None,
+        "PROFILE_PHOTO_MIME": (row.get("PROFILE_PHOTO_MIME") or "").strip() or None,
         "CREATED_AT": row.get("CREATED_AT"),
         "UPDATED_AT": row.get("UPDATED_AT"),
     }
@@ -100,6 +154,7 @@ def is_profile_complete(profile: dict[str, Any] | None) -> bool:
 
     Ratings / planned dates do not count. On non-Postgres backends the
     profile feature is skipped so SiS keeps working until a table exists.
+    Photo is optional.
     """
     if backend() != "postgres":
         return True
@@ -161,6 +216,8 @@ def fetch_profile(email: str) -> dict[str, Any] | None:
             accepted_terms_at,
             marketing_opt_in,
             profile_complete,
+            profile_photo_b64,
+            profile_photo_mime,
             created_at,
             updated_at
         from {table}
@@ -200,6 +257,9 @@ def upsert_profile(
     marketing_opt_in: bool = False,
     date_of_birth: date | None = None,
     phone: str | None = None,
+    profile_photo_b64: str | None = None,
+    profile_photo_mime: str | None = None,
+    update_photo: bool = False,
     mark_complete: bool = True,
 ) -> dict[str, Any]:
     if backend() != "postgres":
@@ -215,14 +275,22 @@ def upsert_profile(
     activities = [a.strip() for a in activity_preferences if str(a).strip()]
     phone_n = (phone or "").strip() or None
 
+    existing = fetch_profile(email_n)
+
     terms_at = accepted_terms_at
     if terms_at is None:
         # Preserve existing terms timestamp if already accepted.
-        existing = fetch_profile(email_n)
         if existing and existing.get("ACCEPTED_TERMS_AT"):
             terms_at = existing["ACCEPTED_TERMS_AT"]
         else:
             terms_at = datetime.utcnow()
+
+    if update_photo:
+        photo_b64 = profile_photo_b64 or None
+        photo_mime = (profile_photo_mime or "").strip() or None if photo_b64 else None
+    else:
+        photo_b64 = (existing or {}).get("PROFILE_PHOTO_B64")
+        photo_mime = (existing or {}).get("PROFILE_PHOTO_MIME")
 
     complete = bool(mark_complete) and compute_profile_complete_flag(
         {
@@ -242,11 +310,13 @@ def upsert_profile(
             user_email, first_name, last_name, date_of_birth, phone,
             city, neighbourhood, dietary_needs, activity_preferences,
             accepted_terms_at, marketing_opt_in, profile_complete,
+            profile_photo_b64, profile_photo_mime,
             created_at, updated_at
         ) values (
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s, %s,
+            %s, %s,
             NOW(), NOW()
         )
         on conflict (user_email) do update set
@@ -261,6 +331,8 @@ def upsert_profile(
             accepted_terms_at = excluded.accepted_terms_at,
             marketing_opt_in = excluded.marketing_opt_in,
             profile_complete = excluded.profile_complete,
+            profile_photo_b64 = excluded.profile_photo_b64,
+            profile_photo_mime = excluded.profile_photo_mime,
             updated_at = NOW()
     """
     execute_write(
@@ -278,6 +350,8 @@ def upsert_profile(
             terms_at,
             bool(marketing_opt_in),
             complete,
+            photo_b64,
+            photo_mime,
         ],
     )
     clear_profile_cache()
@@ -286,4 +360,6 @@ def upsert_profile(
         "FIRST_NAME": first,
         "LAST_NAME": last,
         "PROFILE_COMPLETE": complete,
+        "PROFILE_PHOTO_B64": photo_b64,
+        "PROFILE_PHOTO_MIME": photo_mime,
     }
