@@ -133,6 +133,9 @@ def _as_list(value: Any) -> list[str]:
 def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
+    has_photo = row.get("HAS_PROFILE_PHOTO")
+    if has_photo is None:
+        has_photo = bool(row.get("PROFILE_PHOTO_B64"))
     return {
         "USER_EMAIL": row.get("USER_EMAIL"),
         "FIRST_NAME": (row.get("FIRST_NAME") or "").strip(),
@@ -148,6 +151,7 @@ def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "PROFILE_COMPLETE": bool(row.get("PROFILE_COMPLETE")),
         "PROFILE_PHOTO_B64": row.get("PROFILE_PHOTO_B64") or None,
         "PROFILE_PHOTO_MIME": (row.get("PROFILE_PHOTO_MIME") or "").strip() or None,
+        "HAS_PROFILE_PHOTO": bool(has_photo),
         "CREATED_AT": row.get("CREATED_AT"),
         "UPDATED_AT": row.get("UPDATED_AT"),
     }
@@ -202,10 +206,12 @@ def compute_profile_complete_flag(payload: dict[str, Any]) -> bool:
 
 @st.cache_data(show_spinner=False, ttl=30)
 def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | None:
-    """Load profile. Photo is opt-in — base64 blobs stall mobile after login."""
+    """Load profile. Photo bytes are opt-in — base64 blobs stall mobile after login.
+
+    Does not run DDL on the hot path (schema is ensured on profile save).
+    """
     if not email or backend() != "postgres":
         return None
-    ensure_schema()
     table = user_profiles_table()
     photo_cols = (
         "profile_photo_b64, profile_photo_mime,"
@@ -227,6 +233,8 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
             marketing_opt_in,
             profile_complete,
             {photo_cols}
+            (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
+                as has_profile_photo,
             created_at,
             updated_at
         from {table}
@@ -237,18 +245,11 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
     try:
         rows = run_query(sql, [email_n])
     except Exception:
-        # Table may not exist yet on a fresh deploy — try schema once more.
-        st.session_state.pop(_SCHEMA_APPLIED_KEY, None)
-        try:
-            ensure_schema()
-            rows = run_query(sql, [email_n])
-        except Exception:
-            return None
+        return None
     row = normalize_profile_row(rows[0] if rows else None)
     if row and not include_photo:
         row["PROFILE_PHOTO_B64"] = None
         row["PROFILE_PHOTO_MIME"] = None
-        row["HAS_PROFILE_PHOTO"] = _profile_has_photo(email_n)
     return row
 
 

@@ -154,28 +154,55 @@ def _get_postgres_conn():
         raise RuntimeError("Missing Postgres connection url in secrets or DATABASE_URL.")
 
     conn = st.session_state.get("postgres_conn")
-    if conn is None or conn.closed:
-        conn = psycopg2.connect(url, cursor_factory=RealDictCursor)
+    if conn is None or getattr(conn, "closed", 1):
+        conn = psycopg2.connect(
+            url,
+            cursor_factory=RealDictCursor,
+            connect_timeout=8,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=3,
+            options="-c statement_timeout=8000",
+        )
         st.session_state.postgres_conn = conn
     return conn
 
 
 def _postgres_query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
-    conn = _get_postgres_conn()
-    with conn.cursor() as cur:
-        cur.execute(_bind_sql(sql), params)
-        if cur.description is None:
-            conn.commit()
-            return []
-        rows = cur.fetchall()
-        return _to_upper_rows([dict(row) for row in rows])
+    import psycopg2
+
+    for attempt in range(2):
+        try:
+            conn = _get_postgres_conn()
+            with conn.cursor() as cur:
+                cur.execute(_bind_sql(sql), params)
+                if cur.description is None:
+                    conn.commit()
+                    return []
+                rows = cur.fetchall()
+                return _to_upper_rows([dict(row) for row in rows])
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            st.session_state.pop("postgres_conn", None)
+            if attempt:
+                raise
+    return []
 
 
 def _postgres_execute(sql: str, params: list[Any]) -> None:
-    conn = _get_postgres_conn()
-    with conn.cursor() as cur:
-        cur.execute(_bind_sql(sql), params)
-    conn.commit()
+    import psycopg2
+
+    for attempt in range(2):
+        try:
+            conn = _get_postgres_conn()
+            with conn.cursor() as cur:
+                cur.execute(_bind_sql(sql), params)
+            conn.commit()
+            return
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            st.session_state.pop("postgres_conn", None)
+            if attempt:
+                raise
 
 
 def _snowflake_connection_params() -> dict[str, str]:

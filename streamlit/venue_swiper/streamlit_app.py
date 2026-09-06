@@ -2171,24 +2171,36 @@ def render_plan_date(email: str) -> None:
 
 def render_login() -> None:
     from onboarding import LOGIN_MODE_KEY
+    from brand import wordmark_path
 
     returning = st.session_state.get(LOGIN_MODE_KEY) == "returning"
     if returning:
         title = "Welcome back."
         hint = "Same email as before. We’ll pick up your ratings and profile."
-        cta = "Continue"
     else:
         title = "Create your account."
         hint = "A few taste questions come next, so Discover and dates fit you sooner."
-        cta = "Continue"
 
-    # Keep login light: text brand only (no heavy wordmark embed).
+    mark = wordmark_path(variant="dark_sm") or wordmark_path(variant="light_sm")
+    brand_col, tag_col = st.columns([1.15, 2])
+    with brand_col:
+        if mark is not None:
+            st.image(str(mark), use_container_width=True)
+        else:
+            st.markdown(
+                '<div class="apres-brand-text" style="font-size:22px;line-height:1;">Après</div>',
+                unsafe_allow_html=True,
+            )
+    with tag_col:
+        st.markdown(
+            '<p class="tagline" style="text-align:right;margin:0.55rem 0 0;'
+            'font-family:Cormorant Garamond,Georgia,serif;font-style:italic;'
+            'color:#7A5B48;font-size:14px;">Find what comes next.</p>',
+            unsafe_allow_html=True,
+        )
+
     st.markdown(
         f"""
-        <div class="apres-status">
-            <span class="apres-brand-text" style="font-size:22px;line-height:1;">Après</span>
-            <span class="tagline">Find what comes next.</span>
-        </div>
         <p class="apres-greeting">{title}</p>
         <p class="apres-sub">email only · no password</p>
         <p class="swipe-hint">{hint}</p>
@@ -2198,7 +2210,7 @@ def render_login() -> None:
 
     with st.form("login_form", clear_on_submit=False):
         email_raw = st.text_input("Email", placeholder="you@example.com")
-        submitted = st.form_submit_button(cta, type="primary", use_container_width=True)
+        submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
 
     if submitted:
         email = normalize_email(email_raw)
@@ -2207,8 +2219,6 @@ def render_login() -> None:
             return
         st.session_state["user_email"] = email
         clear_discover_venue()
-        # Avoid DB logging on the auth hot path — it has hung mobile before.
-        log_event("login_ok", "Email accepted; entering app", email=email)
         st.rerun()
 
 
@@ -2573,15 +2583,10 @@ def main() -> None:
         return
 
     email = st.session_state["user_email"]
-    log_event("post_login", "Session has email; loading profile gate", email=email)
 
     try:
-        profile = fetch_profile(email, include_photo=False)
-        log_event(
-            "fetch_profile",
-            "Profile loaded" if profile else "No profile row yet",
-            email=email,
-        )
+        with st.spinner("Loading your profile…"):
+            profile = fetch_profile(email, include_photo=False)
     except Exception as exc:  # noqa: BLE001
         log_event("fetch_profile", "Profile fetch failed", level="error", email=email, exc=exc)
         st.error("Couldn’t load your profile. Pull to refresh, or try again in a moment.")
@@ -2598,7 +2603,6 @@ def main() -> None:
         complete = False
 
     if not complete:
-        log_event("profile_setup", "Routing to profile setup wizard", email=email)
         if st.button("Sign out", type="secondary", use_container_width=True, key="setup_sign_out"):
             clear_discover_venue()
             st.session_state.pop("profile_draft", None)
@@ -2606,10 +2610,6 @@ def main() -> None:
             del st.session_state["user_email"]
             st.rerun()
         try:
-            if not verify_data_access():
-                log_event("verify_data", "Data access failed during setup", level="error", email=email)
-                show_recent_errors()
-                return
             render_profile_setup(email, profile)
         except Exception as exc:  # noqa: BLE001
             log_event("profile_setup_render", "Setup UI crashed", level="error", email=email, exc=exc)
@@ -2647,19 +2647,7 @@ def main() -> None:
         del st.session_state["user_email"]
         st.rerun()
 
-    try:
-        if not verify_data_access():
-            log_event("verify_data", "Data access failed after login", level="error", email=email)
-            show_recent_errors()
-            return
-    except Exception as exc:  # noqa: BLE001
-        log_event("verify_data", "verify_data_access crashed", level="error", email=email, exc=exc)
-        st.error("Couldn’t reach the venue catalog.")
-        show_recent_errors()
-        return
-
     if render_profile_welcome():
-        log_event("welcome", "Showing post-setup welcome", email=email)
         return
 
     log_event("main_tabs", "Rendering main tabs", email=email)
