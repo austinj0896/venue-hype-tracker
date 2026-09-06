@@ -119,6 +119,7 @@ def _hydrate_draft_photos(email: str, draft: dict[str, Any], profile: dict[str, 
         return
     draft["photos"] = [
         {
+            "PHOTO_ID": r.get("PHOTO_ID"),
             "PHOTO_B64": r.get("PHOTO_B64"),
             "PHOTO_MIME": r.get("PHOTO_MIME") or "image/jpeg",
         }
@@ -132,7 +133,10 @@ def _hydrate_draft_photos(email: str, draft: dict[str, Any], profile: dict[str, 
 def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
     """Multi-photo gallery: up to MAX_PROFILE_PHOTOS, first is primary/avatar."""
     st.markdown("Photos (optional)")
-    st.caption(f"Add up to {MAX_PROFILE_PHOTOS}. First photo is your main avatar.")
+    st.caption(
+        f"Add up to {MAX_PROFILE_PHOTOS}. First photo is your main avatar. "
+        "Removing a photo unlinks it from your profile (admin can permanently delete later)."
+    )
 
     photos: list[dict[str, Any]] = list(draft.get("photos") or [])
     if photos:
@@ -162,7 +166,7 @@ def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
                         _save_draft(draft)
                         st.rerun()
                 with b3:
-                    if st.button("✕", key=f"{key_prefix}_del_{i}", help="Remove"):
+                    if st.button("✕", key=f"{key_prefix}_del_{i}", help="Remove from profile"):
                         photos.pop(i)
                         draft["photos"] = photos
                         draft["photos_changed"] = True

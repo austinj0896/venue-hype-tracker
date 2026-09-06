@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import uuid
 import io
 from datetime import date, datetime
 from typing import Any
@@ -12,7 +13,9 @@ import streamlit as st
 from db import (
     backend,
     execute_write,
+    media_photos_table,
     run_query,
+    user_profile_photo_links_table,
     user_profile_photos_table,
     user_profiles_table,
 )
@@ -83,34 +86,102 @@ def ensure_schema() -> None:
 
 
 def ensure_photos_schema() -> None:
-    """Create gallery table if missing. One CREATE — safe to call from photo paths."""
+    """Create media_photos + link tables. Safe to call from photo paths."""
     if backend() != "postgres":
         return
     if st.session_state.get(_PHOTOS_SCHEMA_KEY):
         return
-    table = user_profile_photos_table()
+
+    media_t = media_photos_table()
+    links_t = user_profile_photo_links_table()
+    legacy_t = user_profile_photos_table()
+
+    try:
+        execute_write("CREATE EXTENSION IF NOT EXISTS pgcrypto", [])
+    except Exception:
+        pass
+
     execute_write(
         f"""
-        CREATE TABLE IF NOT EXISTS {table} (
-            photo_id       BIGSERIAL PRIMARY KEY,
-            user_email     TEXT NOT NULL,
-            sort_order     INTEGER NOT NULL DEFAULT 0,
-            photo_b64      TEXT NOT NULL,
-            photo_mime     TEXT NOT NULL DEFAULT 'image/jpeg',
-            created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            CONSTRAINT uq_{table}_order UNIQUE (user_email, sort_order)
+        CREATE TABLE IF NOT EXISTS {media_t} (
+            photo_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            photo_b64          TEXT NOT NULL,
+            photo_mime         TEXT NOT NULL DEFAULT 'image/jpeg',
+            uploaded_by_email  TEXT,
+            byte_length        INTEGER,
+            created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
         [],
     )
+    execute_write(
+        f"""
+        CREATE TABLE IF NOT EXISTS {links_t} (
+            user_email  TEXT NOT NULL,
+            photo_id    UUID NOT NULL REFERENCES {media_t} (photo_id) ON DELETE CASCADE,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            linked_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_email, photo_id)
+        )
+        """,
+        [],
+    )
+    for idx_sql in (
+        f"CREATE UNIQUE INDEX IF NOT EXISTS uq_{links_t}_order ON {links_t} (user_email, sort_order)",
+        f"CREATE INDEX IF NOT EXISTS idx_{links_t}_user ON {links_t} (user_email, sort_order)",
+        f"CREATE INDEX IF NOT EXISTS idx_{links_t}_photo ON {links_t} (photo_id)",
+        f"CREATE INDEX IF NOT EXISTS idx_{media_t}_uploader ON {media_t} (uploaded_by_email)",
+        f"CREATE INDEX IF NOT EXISTS idx_{media_t}_created ON {media_t} (created_at DESC)",
+    ):
+        try:
+            execute_write(idx_sql, [])
+        except Exception:
+            pass
+
+    # One-shot migrate from legacy combined gallery table if it still has rows.
     try:
         execute_write(
-            f"CREATE INDEX IF NOT EXISTS idx_{table}_user ON {table} (user_email, sort_order)",
+            f"""
+            INSERT INTO {media_t} (photo_id, photo_b64, photo_mime, uploaded_by_email, created_at, updated_at)
+            SELECT
+                gen_random_uuid(),
+                upp.photo_b64,
+                coalesce(nullif(upp.photo_mime, ''), 'image/jpeg'),
+                lower(upp.user_email),
+                upp.created_at,
+                upp.updated_at
+            FROM {legacy_t} upp
+            WHERE upp.photo_b64 IS NOT NULL
+              AND length(upp.photo_b64) > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM {media_t} mp
+                  WHERE lower(mp.uploaded_by_email) = lower(upp.user_email)
+                    AND mp.photo_b64 = upp.photo_b64
+              )
+            """,
+            [],
+        )
+        execute_write(
+            f"""
+            INSERT INTO {links_t} (user_email, photo_id, sort_order, linked_at)
+            SELECT DISTINCT ON (lower(upp.user_email), upp.sort_order)
+                lower(upp.user_email),
+                mp.photo_id,
+                upp.sort_order,
+                coalesce(upp.created_at, NOW())
+            FROM {legacy_t} upp
+            JOIN {media_t} mp
+              ON lower(mp.uploaded_by_email) = lower(upp.user_email)
+             AND mp.photo_b64 = upp.photo_b64
+            ORDER BY lower(upp.user_email), upp.sort_order, mp.created_at DESC
+            ON CONFLICT DO NOTHING
+            """,
             [],
         )
     except Exception:
         pass
+
     st.session_state[_PHOTOS_SCHEMA_KEY] = True
 
 
@@ -230,8 +301,9 @@ def compute_profile_complete_flag(payload: dict[str, Any]) -> bool:
 def _normalize_photo_row(row: dict[str, Any], *, include_bytes: bool) -> dict[str, Any]:
     b64 = row.get("PHOTO_B64") or row.get("PROFILE_PHOTO_B64")
     mime = (row.get("PHOTO_MIME") or row.get("PROFILE_PHOTO_MIME") or "image/jpeg").strip()
+    photo_id = row.get("PHOTO_ID")
     out: dict[str, Any] = {
-        "PHOTO_ID": row.get("PHOTO_ID"),
+        "PHOTO_ID": str(photo_id) if photo_id is not None else None,
         "SORT_ORDER": int(row.get("SORT_ORDER") or 0),
         "PHOTO_MIME": mime or "image/jpeg",
         "IS_PRIMARY": int(row.get("SORT_ORDER") or 0) == 0,
@@ -241,9 +313,11 @@ def _normalize_photo_row(row: dict[str, Any], *, include_bytes: bool) -> dict[st
     return out
 
 
-def _migrate_legacy_photo(email_n: str) -> list[dict[str, Any]]:
+def _migrate_legacy_column_photo(email_n: str) -> list[dict[str, Any]]:
+    """Copy user_profiles.profile_photo_b64 into media_photos + link if gallery empty."""
     profiles = user_profiles_table()
-    photos = user_profile_photos_table()
+    media_t = media_photos_table()
+    links_t = user_profile_photo_links_table()
     rows = run_query(
         f"""
         select profile_photo_b64, profile_photo_mime
@@ -261,17 +335,28 @@ def _migrate_legacy_photo(email_n: str) -> list[dict[str, Any]]:
     mime = (rows[0].get("PROFILE_PHOTO_MIME") or "image/jpeg").strip() or "image/jpeg"
     if not b64:
         return []
+    photo_id = str(uuid.uuid4())
     execute_write(
         f"""
-        insert into {photos} (user_email, sort_order, photo_b64, photo_mime, created_at, updated_at)
-        values (%s, 0, %s, %s, NOW(), NOW())
-        on conflict (user_email, sort_order) do nothing
+        insert into {media_t} (
+            photo_id, photo_b64, photo_mime, uploaded_by_email, byte_length, created_at, updated_at
+        ) values (
+            %s, %s, %s, %s, %s, NOW(), NOW()
+        )
         """,
-        [email_n, b64, mime],
+        [photo_id, b64, mime, email_n, len(b64)],
+    )
+    execute_write(
+        f"""
+        insert into {links_t} (user_email, photo_id, sort_order, linked_at)
+        values (%s, %s, 0, NOW())
+        on conflict do nothing
+        """,
+        [email_n, photo_id],
     )
     return [
         {
-            "PHOTO_ID": None,
+            "PHOTO_ID": photo_id,
             "SORT_ORDER": 0,
             "PHOTO_B64": b64,
             "PHOTO_MIME": mime,
@@ -280,9 +365,39 @@ def _migrate_legacy_photo(email_n: str) -> list[dict[str, Any]]:
     ]
 
 
+def _sync_legacy_primary(email_n: str, primary: dict[str, Any] | None) -> None:
+    profiles_t = user_profiles_table()
+    if primary and primary.get("PHOTO_B64"):
+        execute_write(
+            f"""
+            update {profiles_t}
+            set profile_photo_b64 = %s,
+                profile_photo_mime = %s,
+                updated_at = NOW()
+            where lower(user_email) = lower(%s)
+            """,
+            [
+                primary.get("PHOTO_B64"),
+                primary.get("PHOTO_MIME") or "image/jpeg",
+                email_n,
+            ],
+        )
+    else:
+        execute_write(
+            f"""
+            update {profiles_t}
+            set profile_photo_b64 = null,
+                profile_photo_mime = null,
+                updated_at = NOW()
+            where lower(user_email) = lower(%s)
+            """,
+            [email_n],
+        )
+
+
 @st.cache_data(show_spinner=False, ttl=60)
 def list_profile_photos(email: str, include_bytes: bool = True) -> list[dict[str, Any]]:
-    """Ordered gallery photos. First entry is the primary/avatar."""
+    """Ordered gallery photos linked to the profile. First entry is primary/avatar."""
     if not email or backend() != "postgres":
         return []
     email_n = email.strip().lower()
@@ -290,14 +405,21 @@ def list_profile_photos(email: str, include_bytes: bool = True) -> list[dict[str
         ensure_photos_schema()
     except Exception:
         st.session_state[_PHOTOS_SCHEMA_KEY] = True
-    photos_t = user_profile_photos_table()
+
+    media_t = media_photos_table()
+    links_t = user_profile_photo_links_table()
     try:
         rows = run_query(
             f"""
-            select photo_id, sort_order, photo_b64, photo_mime
-            from {photos_t}
-            where lower(user_email) = lower(%s)
-            order by sort_order asc, photo_id asc
+            select
+                l.photo_id,
+                l.sort_order,
+                m.photo_b64,
+                m.photo_mime
+            from {links_t} l
+            join {media_t} m on m.photo_id = l.photo_id
+            where lower(l.user_email) = lower(%s)
+            order by l.sort_order asc, l.linked_at asc
             limit {MAX_PROFILE_PHOTOS}
             """,
             [email_n],
@@ -307,7 +429,7 @@ def list_profile_photos(email: str, include_bytes: bool = True) -> list[dict[str
     if rows:
         return [_normalize_photo_row(r, include_bytes=include_bytes) for r in rows]
     try:
-        migrated = _migrate_legacy_photo(email_n)
+        migrated = _migrate_legacy_column_photo(email_n)
     except Exception:
         migrated = []
     if migrated:
@@ -320,7 +442,7 @@ def list_profile_photos(email: str, include_bytes: bool = True) -> list[dict[str
 
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_profile_photo(email: str) -> dict[str, str | None] | None:
-    """Primary photo for header avatar (gallery first, then legacy column)."""
+    """Primary linked photo for header avatar."""
     photos = list_profile_photos(email, include_bytes=True)
     if photos:
         p0 = photos[0]
@@ -329,6 +451,7 @@ def fetch_profile_photo(email: str) -> dict[str, str | None] | None:
             return {
                 "PROFILE_PHOTO_B64": b64,
                 "PROFILE_PHOTO_MIME": p0.get("PHOTO_MIME") or "image/jpeg",
+                "PHOTO_ID": p0.get("PHOTO_ID"),
             }
     if not email or backend() != "postgres":
         return None
@@ -354,61 +477,85 @@ def fetch_profile_photo(email: str) -> dict[str, str | None] | None:
     return {
         "PROFILE_PHOTO_B64": b64,
         "PROFILE_PHOTO_MIME": (row.get("PROFILE_PHOTO_MIME") or "").strip() or "image/jpeg",
+        "PHOTO_ID": None,
     }
 
 
 def save_profile_photos(email: str, photos: list[dict[str, Any]]) -> int:
-    """Replace the user's gallery. ``photos`` is ordered; index 0 is primary."""
+    """Sync profile links to the given ordered gallery.
+
+    New uploads create durable media_photos rows (UUID). Removing a photo from
+    the profile only deletes the link — the asset remains until admin purge.
+    """
     if backend() != "postgres":
         raise RuntimeError("User photos are only supported on Neon Postgres.")
     ensure_photos_schema()
     email_n = email.strip().lower()
-    photos_t = user_profile_photos_table()
-    profiles_t = user_profiles_table()
+    media_t = media_photos_table()
+    links_t = user_profile_photo_links_table()
 
-    cleaned: list[tuple[str, str]] = []
+    desired: list[dict[str, Any]] = []
     for item in photos[:MAX_PROFILE_PHOTOS]:
+        photo_id = item.get("PHOTO_ID") or item.get("photo_id")
         b64 = (item.get("PHOTO_B64") or item.get("photo_b64") or "").strip()
-        if not b64:
-            continue
         mime = item.get("PHOTO_MIME") or item.get("photo_mime") or "image/jpeg"
         mime_n = str(mime).strip() or "image/jpeg"
-        cleaned.append((b64, mime_n))
 
-    execute_write(f"delete from {photos_t} where lower(user_email) = lower(%s)", [email_n])
-    for idx, (b64, mime) in enumerate(cleaned):
+        if photo_id:
+            pid = str(photo_id)
+            exists = run_query(
+                f"select photo_id, photo_b64, photo_mime from {media_t} where photo_id = %s limit 1",
+                [pid],
+            )
+            if not exists:
+                if not b64:
+                    continue
+                pid = str(uuid.uuid4())
+                execute_write(
+                    f"""
+                    insert into {media_t} (
+                        photo_id, photo_b64, photo_mime, uploaded_by_email, byte_length, created_at, updated_at
+                    ) values (%s, %s, %s, %s, %s, NOW(), NOW())
+                    """,
+                    [pid, b64, mime_n, email_n, len(b64)],
+                )
+            else:
+                if not b64:
+                    b64 = exists[0].get("PHOTO_B64") or ""
+                    mime_n = (exists[0].get("PHOTO_MIME") or mime_n)
+        else:
+            if not b64:
+                continue
+            pid = str(uuid.uuid4())
+            execute_write(
+                f"""
+                insert into {media_t} (
+                    photo_id, photo_b64, photo_mime, uploaded_by_email, byte_length, created_at, updated_at
+                ) values (%s, %s, %s, %s, %s, NOW(), NOW())
+                """,
+                [pid, b64, mime_n, email_n, len(b64)],
+            )
+
+        desired.append({"PHOTO_ID": pid, "PHOTO_B64": b64, "PHOTO_MIME": mime_n})
+
+    # Unlink entire profile gallery, then relink desired order (assets untouched).
+    execute_write(
+        f"delete from {links_t} where lower(user_email) = lower(%s)",
+        [email_n],
+    )
+    for idx, row in enumerate(desired):
         execute_write(
             f"""
-            insert into {photos_t} (user_email, sort_order, photo_b64, photo_mime, created_at, updated_at)
-            values (%s, %s, %s, %s, NOW(), NOW())
+            insert into {links_t} (user_email, photo_id, sort_order, linked_at)
+            values (%s, %s, %s, NOW())
             """,
-            [email_n, idx, b64, mime],
+            [email_n, row["PHOTO_ID"], idx],
         )
 
-    if cleaned:
-        execute_write(
-            f"""
-            update {profiles_t}
-            set profile_photo_b64 = %s,
-                profile_photo_mime = %s,
-                updated_at = NOW()
-            where lower(user_email) = lower(%s)
-            """,
-            [cleaned[0][0], cleaned[0][1], email_n],
-        )
-    else:
-        execute_write(
-            f"""
-            update {profiles_t}
-            set profile_photo_b64 = null,
-                profile_photo_mime = null,
-                updated_at = NOW()
-            where lower(user_email) = lower(%s)
-            """,
-            [email_n],
-        )
+    primary = desired[0] if desired else None
+    _sync_legacy_primary(email_n, primary)
     clear_profile_cache()
-    return len(cleaned)
+    return len(desired)
 
 
 @st.cache_data(show_spinner=False, ttl=30)
@@ -417,7 +564,7 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
     if not email or backend() != "postgres":
         return None
     table = user_profiles_table()
-    photos_t = user_profile_photos_table()
+    links_t = user_profile_photo_links_table()
     photo_cols = (
         "p.profile_photo_b64, p.profile_photo_mime,"
         if include_photo
@@ -439,12 +586,12 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
             p.profile_complete,
             {photo_cols}
             coalesce(
-                (select count(*)::int from {photos_t} g where lower(g.user_email) = lower(p.user_email)),
+                (select count(*)::int from {links_t} g where lower(g.user_email) = lower(p.user_email)),
                 0
             ) as photo_count,
             (
                 exists (
-                    select 1 from {photos_t} g
+                    select 1 from {links_t} g
                     where lower(g.user_email) = lower(p.user_email)
                 )
                 or (p.profile_photo_b64 is not null and length(p.profile_photo_b64) > 0)

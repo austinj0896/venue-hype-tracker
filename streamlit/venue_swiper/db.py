@@ -13,12 +13,16 @@ DEFAULT_POSTGRES_TAGS = "venue_tags"
 DEFAULT_POSTGRES_HOURS = "venue_hours"
 DEFAULT_POSTGRES_PROFILES = "user_profiles"
 DEFAULT_POSTGRES_PROFILE_PHOTOS = "user_profile_photos"
+DEFAULT_POSTGRES_MEDIA_PHOTOS = "media_photos"
+DEFAULT_POSTGRES_PHOTO_LINKS = "user_profile_photo_links"
 DEFAULT_SF_DIM = "VENUE_HYPE.STAGING_MARTS.DIM_PLACES"
 DEFAULT_SF_RATINGS = "VENUE_HYPE.APP.VENUE_RATINGS"
 DEFAULT_SF_TAGS = "VENUE_HYPE.APP.VENUE_TAGS"
 DEFAULT_SF_HOURS = "VENUE_HYPE.APP.VENUE_HOURS"
 DEFAULT_SF_PROFILES = "VENUE_HYPE.APP.USER_PROFILES"
 DEFAULT_SF_PROFILE_PHOTOS = "VENUE_HYPE.APP.USER_PROFILE_PHOTOS"
+DEFAULT_SF_MEDIA_PHOTOS = "VENUE_HYPE.APP.MEDIA_PHOTOS"
+DEFAULT_SF_PHOTO_LINKS = "VENUE_HYPE.APP.USER_PROFILE_PHOTO_LINKS"
 
 
 def backend() -> str:
@@ -133,6 +137,7 @@ def user_profiles_table() -> str:
 
 
 def user_profile_photos_table() -> str:
+    """Legacy combined gallery table name (migration source only)."""
     if backend() == "postgres":
         try:
             return str(
@@ -148,6 +153,38 @@ def user_profile_photos_table() -> str:
         )
     except Exception:
         return DEFAULT_SF_PROFILE_PHOTOS
+
+
+def media_photos_table() -> str:
+    if backend() == "postgres":
+        try:
+            return str(
+                st.secrets.get("app", {}).get("media_photos_table", DEFAULT_POSTGRES_MEDIA_PHOTOS)
+            )
+        except Exception:
+            return DEFAULT_POSTGRES_MEDIA_PHOTOS
+    try:
+        return str(st.secrets.get("app", {}).get("media_photos_table", DEFAULT_SF_MEDIA_PHOTOS))
+    except Exception:
+        return DEFAULT_SF_MEDIA_PHOTOS
+
+
+def user_profile_photo_links_table() -> str:
+    if backend() == "postgres":
+        try:
+            return str(
+                st.secrets.get("app", {}).get(
+                    "user_profile_photo_links_table", DEFAULT_POSTGRES_PHOTO_LINKS
+                )
+            )
+        except Exception:
+            return DEFAULT_POSTGRES_PHOTO_LINKS
+    try:
+        return str(
+            st.secrets.get("app", {}).get("user_profile_photo_links_table", DEFAULT_SF_PHOTO_LINKS)
+        )
+    except Exception:
+        return DEFAULT_SF_PHOTO_LINKS
 
 
 def _to_upper_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
