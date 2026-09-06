@@ -30,7 +30,6 @@ DRAFT_KEY = "profile_draft"
 STEP_KEY = "profile_setup_step"
 PREVIEW_OPEN_KEY = "apres_profile_preview_open"
 PREVIEW_IDX_KEY = "apres_preview_photo_idx"
-PREVIEW_QP = "apres_p"
 PROFILE_FLASH_KEY = "apres_profile_flash"
 
 
@@ -305,7 +304,7 @@ def _dismiss_profile_preview() -> None:
     st.session_state[PREVIEW_OPEN_KEY] = False
 
 
-@st.dialog("Preview", width="large", on_dismiss=_dismiss_profile_preview)
+@st.dialog("Preview", width="small", on_dismiss=_dismiss_profile_preview)
 def _open_profile_preview_dialog(
     *,
     first_name: str,
@@ -338,25 +337,12 @@ def render_profile_preview_card(
     photos: list[dict[str, Any]],
     date_of_birth: Any = None,
 ) -> None:
-    """Dating-app preview: dark card; tap left/right half of the photo to flip."""
+    """Phone-sized dating card; tap left/right on the photo to flip in-place."""
+    import json
+
     import streamlit.components.v1 as components
 
     n = len(photos)
-
-    # Side-taps navigate via ?apres_p=<index> (set from the photo iframe).
-    try:
-        raw = st.query_params.get(PREVIEW_QP)
-        if raw is not None and n > 0:
-            if isinstance(raw, (list, tuple)):
-                raw = raw[0] if raw else "0"
-            st.session_state[PREVIEW_IDX_KEY] = int(str(raw)) % n
-            try:
-                del st.query_params[PREVIEW_QP]
-            except Exception:
-                pass
-    except Exception:
-        pass
-
     idx = int(st.session_state.get(PREVIEW_IDX_KEY, 0) or 0)
     if n:
         idx = max(0, min(n - 1, idx))
@@ -373,54 +359,72 @@ def render_profile_preview_card(
     place_bits = [b for b in [(neighbourhood or "").strip(), (city or "").strip()] if b]
     place = escape(" · ".join(place_bits)) if place_bits else "Somewhere great"
 
-    diet_html = _chips_html([d for d in dietary if d and d != "None"]) or (
+    diet_items = [d for d in dietary if d and d != "None"]
+    diet_html = _chips_html(diet_items) or (
         '<span class="chip muted">Open to anything</span>'
         if "None" in dietary or not dietary
         else ""
     )
-    # Reuse chip helper class names for iframe CSS
     diet_html = diet_html.replace("preview-chip", "chip")
     act_html = _chips_html(list(activities)) or (
         '<span class="preview-chip muted">Still figuring it out</span>'
     )
     act_html = act_html.replace("preview-chip", "chip")
 
-    photo_h = 360
+    # Flips stay inside the iframe — parent URL changes bounced mobile back to welcome.
+    uris: list[str] = []
+    for photo in photos:
+        uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
+    uris_json = json.dumps(uris)
+
     if n:
-        photo = photos[idx]
-        uri = photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or ""
-        segments = "".join(
-            f'<span class="seg{" on" if i == idx else ""}"></span>' for i in range(n)
+        uri0 = uris[idx] if uris[idx] else ""
+        img_html = (
+            f'<img id="photo" src="{uri0}" alt=""/>'
+            if uri0
+            else '<div class="empty" id="photoEmpty">No photo</div>'
         )
-        prev_i = (idx - 1) % n
-        next_i = (idx + 1) % n
-        if uri:
-            img_html = f'<img src="{uri}" alt=""/>'
-        else:
-            img_html = '<div class="empty">No photo</div>'
+        segments = "".join(
+            f'<span class="seg{" on" if i == idx else ""}" data-i="{i}"></span>' for i in range(n)
+        )
+        seg_html = f'<div class="segs" id="segs">{segments}</div>'
         taps = (
-            f'<a class="tap left" id="tapL" target="_parent" href="#" aria-label="Previous photo"></a>'
-            f'<a class="tap right" id="tapR" target="_parent" href="#" aria-label="Next photo"></a>'
+            '<div class="tap left" id="tapL" role="button" aria-label="Previous photo"></div>'
+            '<div class="tap right" id="tapR" role="button" aria-label="Next photo"></div>'
             if n > 1
             else ""
         )
-        seg_html = f'<div class="segs">{segments}</div>'
         nav_script = f"""
 <script>
 (function() {{
-  function hrefFor(i) {{
-    try {{
-      var u = new URL(window.parent.location.href);
-      u.searchParams.set("{PREVIEW_QP}", String(i));
-      return u.toString();
-    }} catch (e) {{
-      return "?{PREVIEW_QP}=" + String(i);
+  var URIS = {uris_json};
+  var idx = {idx};
+  var img = document.getElementById("photo");
+  function show(next) {{
+    if (!URIS.length) return;
+    idx = (next % URIS.length + URIS.length) % URIS.length;
+    if (img && URIS[idx]) img.setAttribute("src", URIS[idx]);
+    var segs = document.querySelectorAll("#segs .seg");
+    for (var i = 0; i < segs.length; i++) {{
+      if (i === idx) segs[i].classList.add("on");
+      else segs[i].classList.remove("on");
     }}
   }}
-  var L = document.getElementById("tapL");
-  var R = document.getElementById("tapR");
-  if (L) L.setAttribute("href", hrefFor({prev_i}));
-  if (R) R.setAttribute("href", hrefFor({next_i}));
+  function bind(el, delta) {{
+    if (!el) return;
+    el.addEventListener("click", function(e) {{
+      e.preventDefault();
+      e.stopPropagation();
+      show(idx + delta);
+    }});
+    el.addEventListener("touchend", function(e) {{
+      e.preventDefault();
+      e.stopPropagation();
+      show(idx + delta);
+    }}, {{passive: false}});
+  }}
+  bind(document.getElementById("tapL"), -1);
+  bind(document.getElementById("tapR"), 1);
 }})();
 </script>
 """
@@ -430,11 +434,16 @@ def render_profile_preview_card(
         seg_html = ""
         nav_script = ""
 
-    # Entire card in one iframe so Streamlit theme never washes out cream-on-cream.
-    frame_h = photo_h + 240
+    # Portrait photo (~3:4 of ~360px) + taste chips; scroll inside iframe if needed.
+    act_n = max(1, len([a for a in activities if a]))
+    diet_n = max(1, len(diet_items) or 1)
+    chip_rows = (act_n + 1) // 2 + (diet_n + 1) // 2
+    frame_h = min(920, 560 + chip_rows * 40)
+
     components.html(
         f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
   html, body {{
     margin: 0;
@@ -443,6 +452,9 @@ def render_profile_preview_card(
     font-family: system-ui, -apple-system, Segoe UI, sans-serif;
   }}
   .card {{
+    width: 100%;
+    max-width: 380px;
+    margin: 0 auto;
     background:
       linear-gradient(165deg, rgba(211,163,69,0.18) 0%, transparent 38%),
       linear-gradient(180deg, #7A5643 0%, #704D3B 55%, #5E3F31 100%);
@@ -454,7 +466,7 @@ def render_profile_preview_card(
   .stage {{
     position: relative;
     width: 100%;
-    height: {photo_h}px;
+    aspect-ratio: 3 / 4;
     background: #2C1A10;
     overflow: hidden;
   }}
@@ -462,15 +474,18 @@ def render_profile_preview_card(
     width: 100%;
     height: 100%;
     object-fit: cover;
+    object-position: center 18%;
     display: block;
     pointer-events: none;
     user-select: none;
+    -webkit-user-drag: none;
   }}
   .empty {{
     display: flex;
     align-items: center;
     justify-content: center;
     height: 100%;
+    min-height: 280px;
     color: rgba(248,230,210,0.55);
     font-size: 15px;
     padding: 1.5rem;
@@ -501,43 +516,44 @@ def render_profile_preview_card(
     z-index: 4;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }}
   .tap.left {{ left: 0; }}
   .tap.right {{ right: 0; }}
   .tap:active {{ background: rgba(248,230,210,0.12); }}
-  .body {{ padding: 1.1rem 1.15rem 1.3rem; }}
+  .body {{ padding: 0.95rem 1rem 1.15rem; }}
   .name {{
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 30px;
+    font-size: 28px;
     font-weight: 500;
     font-style: italic;
     color: #F8E6D2;
     line-height: 1.1;
-    margin: 0 0 0.3rem;
+    margin: 0 0 0.25rem;
   }}
   .place {{
-    font-size: 14px;
+    font-size: 13px;
     color: rgba(248,230,210,0.72);
-    margin: 0 0 0.85rem;
+    margin: 0 0 0.7rem;
   }}
   .label {{
     font-size: 10px;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: rgba(248,230,210,0.45);
-    margin: 0.55rem 0 0.35rem;
+    margin: 0.45rem 0 0.28rem;
   }}
-  .chips {{ display: flex; flex-wrap: wrap; gap: 0.35rem; }}
+  .chips {{ display: flex; flex-wrap: wrap; gap: 0.3rem; }}
   .chip {{
     display: inline-flex;
     align-items: center;
-    min-height: 30px;
-    padding: 0.25rem 0.65rem;
+    min-height: 28px;
+    padding: 0.22rem 0.6rem;
     border-radius: 999px;
     background: rgba(248,230,210,0.1);
     border: 1px solid rgba(248,230,210,0.14);
     color: #F8E6D2;
-    font-size: 13px;
+    font-size: 12px;
   }}
   .chip.muted {{ color: rgba(248,230,210,0.55); }}
 </style></head><body>
@@ -559,7 +575,7 @@ def render_profile_preview_card(
 {nav_script}
 </body></html>""",
         height=frame_h,
-        scrolling=False,
+        scrolling=True,
     )
 
 
@@ -677,11 +693,34 @@ def profile_setup_css() -> str:
 }
 /* Preview card lives in components.html; keep chip helper styles for markdown fallbacks. */
 div[data-testid="stCustomComponentV1"] {
-    margin: 0.35rem 0 0.85rem;
+    margin: 0.15rem 0 0.35rem;
 }
 div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
+}
+/* Give the preview modal a phone-card shape; dark chrome matches the card. */
+div[data-testid="stDialog"] > div[role="dialog"],
+div[data-testid="stModal"] > div[role="dialog"],
+[data-testid="stDialog"] section[role="dialog"],
+div[data-testid="stDialog"] div[role="dialog"] {
+    max-width: min(96vw, 400px) !important;
+    width: min(96vw, 400px) !important;
+    max-height: 94vh !important;
+    overflow-y: auto !important;
+    padding: 0.65rem 0.55rem 0.75rem !important;
+    background: #2C1A10 !important;
+    border: 1px solid rgba(248, 230, 210, 0.12) !important;
+    color: #F8E6D2 !important;
+}
+div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
+div[data-testid="stDialog"] h2,
+div[data-testid="stDialog"] [data-testid="stWidgetLabel"] {
+    color: #F8E6D2 !important;
+}
+div[data-testid="stDialog"] button[kind="header"],
+div[data-testid="stDialog"] button[aria-label="Close"] {
+    color: #F8E6D2 !important;
 }
 .preview-chip {
     display: inline-flex;
