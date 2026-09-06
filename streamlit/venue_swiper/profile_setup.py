@@ -16,6 +16,7 @@ from profile_options import (
 )
 from user_profiles_store import (
     clear_profile_cache,
+    fetch_profile_photo,
     is_profile_complete,
     photo_bytes,
     prepare_profile_photo,
@@ -100,6 +101,23 @@ def _neighbourhood_select(
         current = ""
     index = hoods.index(current) if current in hoods else 0
     return st.selectbox(label, hoods, index=index, key=key)
+
+
+def _hydrate_draft_photo(email: str, draft: dict[str, Any], profile: dict[str, Any]) -> None:
+    """Load photo bytes once into the draft when the profile only has a flag."""
+    if draft.get("photo_b64") or draft.get("photo_changed"):
+        return
+    if not profile.get("HAS_PROFILE_PHOTO"):
+        return
+    try:
+        photo = fetch_profile_photo(email)
+    except Exception:
+        return
+    if not photo or not photo.get("PROFILE_PHOTO_B64"):
+        return
+    draft["photo_b64"] = photo.get("PROFILE_PHOTO_B64")
+    draft["photo_mime"] = photo.get("PROFILE_PHOTO_MIME") or "image/jpeg"
+    _save_draft(draft)
 
 
 def _render_photo_picker(draft: dict[str, Any], *, key_prefix: str) -> None:
@@ -533,6 +551,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     )
 
     draft = _get_draft(email, profile)
+    _hydrate_draft_photo(email, draft, profile)
     _render_photo_picker(draft, key_prefix="edit")
 
     c1, c2 = st.columns(2)
@@ -597,7 +616,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
 
     if st.button("Save profile", type="primary", use_container_width=True, key="edit_save"):
         if not first.strip() or not last.strip() or not choice or not neighbourhood:
-            st.error("Name, city, and neighbourhood are required.")
+            st.error("Name, city, and neighbourhood are required. If you changed city, pick a neighbourhood again.")
             return
         if not dietary:
             st.error("Select at least one dietary option (None is fine).")
@@ -606,24 +625,27 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
             st.error("Select at least one activity.")
             return
         try:
-            saved = upsert_profile(
-                email=email,
-                first_name=first.strip(),
-                last_name=last.strip(),
-                city=choice.strip(),
-                neighbourhood=neighbourhood.strip(),
-                dietary_needs=list(dietary),
-                activity_preferences=list(activities),
-                accepted_terms_at=profile.get("ACCEPTED_TERMS_AT") or datetime.utcnow(),
-                marketing_opt_in=bool(marketing),
-                date_of_birth=dob if isinstance(dob, date) else None,
-                phone=phone.strip() or None,
-                profile_photo_b64=draft.get("photo_b64"),
-                profile_photo_mime=draft.get("photo_mime"),
-                update_photo=bool(draft.get("photo_changed")),
-                mark_complete=True,
-            )
+            with st.spinner("Saving…"):
+                saved = upsert_profile(
+                    email=email,
+                    first_name=first.strip(),
+                    last_name=last.strip(),
+                    city=choice.strip(),
+                    neighbourhood=str(neighbourhood).strip(),
+                    dietary_needs=list(dietary),
+                    activity_preferences=list(activities),
+                    accepted_terms_at=profile.get("ACCEPTED_TERMS_AT") or datetime.utcnow(),
+                    marketing_opt_in=bool(marketing),
+                    date_of_birth=dob if isinstance(dob, date) else None,
+                    phone=phone.strip() or None,
+                    profile_photo_b64=draft.get("photo_b64"),
+                    profile_photo_mime=draft.get("photo_mime"),
+                    update_photo=bool(draft.get("photo_changed")),
+                    mark_complete=True,
+                    existing=profile,
+                )
         except Exception as exc:  # noqa: BLE001
+            st.session_state[PROFILE_FLASH_KEY] = None
             st.error(f"Could not save: {exc}")
             return
         if not is_profile_complete(saved):
@@ -632,6 +654,6 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         st.session_state.pop(DRAFT_KEY, None)
         clear_profile_cache()
         st.session_state[PROFILE_FLASH_KEY] = (
-            f"Saved. City set to {saved.get('CITY') or choice}."
+            f"Saved · {saved.get('CITY')} · {saved.get('NEIGHBOURHOOD')}"
         )
         st.rerun()

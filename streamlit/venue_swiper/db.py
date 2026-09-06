@@ -213,6 +213,8 @@ def _postgres_execute(sql: str, params: list[Any]) -> None:
         try:
             conn = _get_postgres_conn()
             with conn.cursor() as cur:
+                # SET after connect is pooler-safe; startup options= is not.
+                cur.execute("SET statement_timeout = '12000'")
                 cur.execute(_bind_sql(sql), params)
             conn.commit()
             return

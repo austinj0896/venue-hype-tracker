@@ -208,7 +208,7 @@ def compute_profile_complete_flag(payload: dict[str, Any]) -> bool:
 def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | None:
     """Load profile. Photo bytes are opt-in — base64 blobs stall mobile after login.
 
-    Does not run DDL on the hot path (schema is ensured on profile save).
+    Does not run DDL on the hot path (table is expected to already exist on Neon).
     """
     if not email or backend() != "postgres":
         return None
@@ -307,14 +307,11 @@ def fetch_profile_photo(email: str) -> dict[str, str | None] | None:
 
 
 def clear_profile_cache() -> None:
-    try:
-        fetch_profile.clear()
-    except Exception:
-        pass
-    try:
-        fetch_profile_photo.clear()
-    except Exception:
-        pass
+    for fn in (fetch_profile, fetch_profile_photo):
+        try:
+            fn.clear()
+        except Exception:
+            pass
 
 
 def upsert_profile(
@@ -334,11 +331,12 @@ def upsert_profile(
     profile_photo_mime: str | None = None,
     update_photo: bool = False,
     mark_complete: bool = True,
+    existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if backend() != "postgres":
         raise RuntimeError("User profiles are only supported on Neon Postgres.")
 
-    ensure_schema()
+    # Do not run DDL here — cold ensure_schema() has hung saves on the Neon pooler.
     email_n = email.strip().lower()
     first = first_name.strip()
     last = last_name.strip()
@@ -348,14 +346,11 @@ def upsert_profile(
     activities = [a.strip() for a in activity_preferences if str(a).strip()]
     phone_n = (phone or "").strip() or None
 
-    # Never pull photo bytes on the write path — that stalls mobile.
-    existing = fetch_profile(email_n, include_photo=False)
-
+    prior = existing
     terms_at = accepted_terms_at
     if terms_at is None:
-        # Preserve existing terms timestamp if already accepted.
-        if existing and existing.get("ACCEPTED_TERMS_AT"):
-            terms_at = existing["ACCEPTED_TERMS_AT"]
+        if prior and prior.get("ACCEPTED_TERMS_AT"):
+            terms_at = prior["ACCEPTED_TERMS_AT"]
         else:
             terms_at = datetime.utcnow()
 
@@ -379,65 +374,78 @@ def upsert_profile(
     )
 
     table = user_profiles_table()
-    sql = f"""
-        insert into {table} (
-            user_email, first_name, last_name, date_of_birth, phone,
-            city, neighbourhood, dietary_needs, activity_preferences,
-            accepted_terms_at, marketing_opt_in, profile_complete,
-            profile_photo_b64, profile_photo_mime,
-            created_at, updated_at
-        ) values (
-            %s, %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s, %s,
-            %s, %s,
-            NOW(), NOW()
-        )
-        on conflict (user_email) do update set
-            first_name = excluded.first_name,
-            last_name = excluded.last_name,
-            date_of_birth = excluded.date_of_birth,
-            phone = excluded.phone,
-            city = excluded.city,
-            neighbourhood = excluded.neighbourhood,
-            dietary_needs = excluded.dietary_needs,
-            activity_preferences = excluded.activity_preferences,
-            accepted_terms_at = excluded.accepted_terms_at,
-            marketing_opt_in = excluded.marketing_opt_in,
-            profile_complete = excluded.profile_complete,
-            profile_photo_b64 = CASE
-                WHEN %s THEN excluded.profile_photo_b64
-                ELSE {table}.profile_photo_b64
-            END,
-            profile_photo_mime = CASE
-                WHEN %s THEN excluded.profile_photo_mime
-                ELSE {table}.profile_photo_mime
-            END,
-            updated_at = NOW()
-    """
-    execute_write(
-        sql,
-        [
-            email_n,
-            first,
-            last,
-            date_of_birth,
-            phone_n,
-            city_n,
-            hood,
-            dietary,
-            activities,
-            terms_at,
-            bool(marketing_opt_in),
-            complete,
-            photo_b64,
-            photo_mime,
-            bool(update_photo),
-            bool(update_photo),
-        ],
-    )
+    if update_photo:
+        sql = f"""
+            insert into {table} (
+                user_email, first_name, last_name, date_of_birth, phone,
+                city, neighbourhood, dietary_needs, activity_preferences,
+                accepted_terms_at, marketing_opt_in, profile_complete,
+                profile_photo_b64, profile_photo_mime,
+                created_at, updated_at
+            ) values (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s,
+                NOW(), NOW()
+            )
+            on conflict (user_email) do update set
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                date_of_birth = excluded.date_of_birth,
+                phone = excluded.phone,
+                city = excluded.city,
+                neighbourhood = excluded.neighbourhood,
+                dietary_needs = excluded.dietary_needs,
+                activity_preferences = excluded.activity_preferences,
+                accepted_terms_at = excluded.accepted_terms_at,
+                marketing_opt_in = excluded.marketing_opt_in,
+                profile_complete = excluded.profile_complete,
+                profile_photo_b64 = excluded.profile_photo_b64,
+                profile_photo_mime = excluded.profile_photo_mime,
+                updated_at = NOW()
+        """
+        params: list[Any] = [
+            email_n, first, last, date_of_birth, phone_n,
+            city_n, hood, dietary, activities,
+            terms_at, bool(marketing_opt_in), complete,
+            photo_b64, photo_mime,
+        ]
+    else:
+        sql = f"""
+            insert into {table} (
+                user_email, first_name, last_name, date_of_birth, phone,
+                city, neighbourhood, dietary_needs, activity_preferences,
+                accepted_terms_at, marketing_opt_in, profile_complete,
+                created_at, updated_at
+            ) values (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s,
+                NOW(), NOW()
+            )
+            on conflict (user_email) do update set
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                date_of_birth = excluded.date_of_birth,
+                phone = excluded.phone,
+                city = excluded.city,
+                neighbourhood = excluded.neighbourhood,
+                dietary_needs = excluded.dietary_needs,
+                activity_preferences = excluded.activity_preferences,
+                accepted_terms_at = excluded.accepted_terms_at,
+                marketing_opt_in = excluded.marketing_opt_in,
+                profile_complete = excluded.profile_complete,
+                updated_at = NOW()
+        """
+        params = [
+            email_n, first, last, date_of_birth, phone_n,
+            city_n, hood, dietary, activities,
+            terms_at, bool(marketing_opt_in), complete,
+        ]
+
+    execute_write(sql, params)
     clear_profile_cache()
-    # Don't re-fetch with photo on the write path — that can hang mobile after save.
     return {
         "USER_EMAIL": email_n,
         "FIRST_NAME": first,
@@ -454,5 +462,5 @@ def upsert_profile(
         "PROFILE_PHOTO_B64": photo_b64 if update_photo else None,
         "PROFILE_PHOTO_MIME": photo_mime if update_photo else None,
         "HAS_PROFILE_PHOTO": bool(update_photo and photo_b64)
-        or bool((existing or {}).get("HAS_PROFILE_PHOTO")),
+        or bool((prior or {}).get("HAS_PROFILE_PHOTO")),
     }

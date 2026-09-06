@@ -220,20 +220,23 @@ h1, h2, h3 {{
     min-width: 0;
 }}
 .apres-brand-header {{
-    height: 34px;
+    height: 40px;
     width: auto;
-    max-width: min(46vw, 168px);
+    max-width: min(52vw, 200px);
     object-fit: contain;
     object-position: left center;
     display: block;
     flex-shrink: 0;
+    image-rendering: -webkit-optimize-contrast;
 }}
 .apres-brand-hero {{
-    width: min(88%, 240px);
+    width: min(86%, 280px);
     height: auto;
     display: block;
     margin: 0 auto 0.9rem;
-    transform: translateX(4%);
+}}
+div[data-testid="stImage"] img {{
+    image-rendering: -webkit-optimize-contrast;
 }}
 .apres-brand-text {{
     font-family: {FONT_DISPLAY};
@@ -2181,11 +2184,11 @@ def render_login() -> None:
         title = "Create your account."
         hint = "A few taste questions come next, so Discover and dates fit you sooner."
 
-    mark = wordmark_path(variant="sm")
+    mark = wordmark_path()
     brand_col, tag_col = st.columns([1.15, 2])
     with brand_col:
         if mark is not None:
-            st.image(str(mark), use_container_width=True)
+            st.image(str(mark), width=160)
         else:
             st.markdown(
                 '<div class="apres-brand-text" style="font-size:22px;line-height:1;">Après</div>',
@@ -2714,9 +2717,8 @@ def main() -> None:
 
     with tab_profile:
         try:
-            # Load photo only on Profile tab (heavy base64).
-            profile_full = fetch_profile(email, include_photo=True) or profile or {}
-            render_profile_settings(email, profile_full)
+            # Keep the lightweight profile row; photo bytes load lazily in the picker.
+            render_profile_settings(email, profile or {})
         except Exception as exc:  # noqa: BLE001
             log_event("profile_tab", "Profile tab crashed", level="error", email=email, exc=exc)
             st.error("Profile hit an error.")

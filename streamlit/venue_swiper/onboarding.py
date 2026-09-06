@@ -41,12 +41,8 @@ _SLIDES = (
 
 def onboarding_css() -> str:
     return """
-.ob-splash-spacer {
-    height: 1.25rem;
-}
 div[data-testid="stImage"] img {
-    /* Optical center: left swash on A pulls weight left */
-    transform: translateX(3%);
+    image-rendering: -webkit-optimize-contrast;
 }
 .ob-pulse {
     width: 10px;
@@ -142,10 +138,11 @@ def render_onboarding() -> None:
 
     if step <= 0:
         mark = wordmark_path()
+        # Fixed CSS width (not container stretch) keeps Streamlit from serving a soft upscale.
         left, mid, right = st.columns([1, 3.2, 1])
         with mid:
             if mark is not None:
-                st.image(str(mark), use_container_width=True)
+                st.image(str(mark), width=280)
             else:
                 st.markdown(
                     '<div class="apres-brand-text" style="font-size:42px;text-align:center;">Après</div>',
