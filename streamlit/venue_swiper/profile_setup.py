@@ -436,9 +436,9 @@ def render_profile_preview_card(
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
-    # Fit typical phone / small dialog; only .body scrolls inside.
-    shell_h = 620
-    photo_h = 260
+    # Max iframe height; JS shrinks to the dialog viewport so mobile isn't clipped.
+    shell_h = 720
+    photo_h = 220
     uri0 = uris[idx] if n and uris[idx] else ""
     img_html = (
         f'<img id="photo" src="{uri0}" alt=""/>'
@@ -468,14 +468,17 @@ def render_profile_preview_card(
     background: #2C1A10;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     color: #F8E6D2;
+    overflow: hidden;
   }}
   .shell {{
     height: {shell_h}px;
+    max-height: 100%;
     display: flex;
     flex-direction: column;
     background: #2C1A10;
     overflow: hidden;
     border-radius: 18px;
+    box-sizing: border-box;
   }}
   .stage {{
     position: relative;
@@ -514,12 +517,14 @@ def render_profile_preview_card(
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+    touch-action: pan-y;
     background: linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
-    padding: 0.85rem 1rem 0.75rem;
+    padding: 0.85rem 1rem 1.75rem;
+    box-sizing: border-box;
   }}
   .preview-name {{
     font-family: Georgia, "Times New Roman", serif;
-    font-size: 28px; font-weight: 500; font-style: italic;
+    font-size: 26px; font-weight: 500; font-style: italic;
     color: #F8E6D2; line-height: 1.1; margin: 0 0 0.25rem;
   }}
   .preview-place {{
@@ -542,7 +547,7 @@ def render_profile_preview_card(
   .preview-chip.muted {{ color: rgba(248,230,210,0.55); font-style: italic; }}
   .footer {{
     flex: 0 0 auto;
-    padding: 0.65rem 0.75rem 0.75rem;
+    padding: 0.55rem 0.75rem calc(0.65rem + env(safe-area-inset-bottom, 0px));
     background: #5E3F31;
     border-radius: 0 0 18px 18px;
   }}
@@ -554,13 +559,13 @@ def render_profile_preview_card(
   }}
   .close-btn:active {{ background: #E8D4BC; }}
 </style></head><body>
-<div class="shell">
-  <div class="stage">
+<div class="shell" id="shell">
+  <div class="stage" id="stage">
     {segs_html}
     {img_html}
     {taps}
   </div>
-  <div class="body">
+  <div class="body" id="body">
     <div class="preview-name">{title}</div>
     <div class="preview-place">{place}</div>
     {status_html}
@@ -578,6 +583,93 @@ def render_profile_preview_card(
   var URIS = {uris_json};
   var idx = {idx};
   var img = document.getElementById("photo");
+
+  function fitToViewport() {{
+    var avail = 0;
+    try {{
+      var parentH = window.parent.innerHeight || 0;
+      var dlg = window.parent.document.querySelector('[data-testid="stDialog"]');
+      if (dlg) {{
+        var r = dlg.getBoundingClientRect();
+        // Content area under dialog title/close row
+        avail = Math.floor((r.height || parentH) - 64);
+      }} else {{
+        avail = Math.floor(parentH * 0.86);
+      }}
+    }} catch (e) {{
+      avail = Math.floor((window.innerHeight || 640) * 0.9);
+    }}
+    avail = Math.max(400, Math.min(avail, 720));
+    var photoH = avail < 520 ? 160 : (avail < 600 ? 190 : 220);
+    var stage = document.getElementById("stage");
+    var shell = document.getElementById("shell");
+    if (stage) {{
+      stage.style.flex = "0 0 " + photoH + "px";
+      stage.style.height = photoH + "px";
+    }}
+    if (shell) shell.style.height = avail + "px";
+    var frame = window.frameElement;
+    if (frame) {{
+      frame.style.height = avail + "px";
+      frame.setAttribute("height", String(avail));
+      try {{
+        var wrap = frame.parentElement;
+        if (wrap) {{
+          wrap.style.height = avail + "px";
+          wrap.style.maxHeight = avail + "px";
+          wrap.style.overflow = "hidden";
+        }}
+      }} catch (e2) {{}}
+    }}
+  }}
+  function blurBackdrop() {{
+    try {{
+      var doc = window.parent.document;
+      var overlays = doc.querySelectorAll(
+        '[data-testid="stDialogOverlay"], .react-aria-ModalOverlay'
+      );
+      overlays.forEach(function(el) {{
+        el.style.webkitBackdropFilter = "blur(14px) saturate(1.05)";
+        el.style.backdropFilter = "blur(14px) saturate(1.05)";
+        el.style.background = "rgba(44, 26, 16, 0.42)";
+      }});
+      // Underlay sibling often wraps the dialog portal
+      var dlg = doc.querySelector('[data-testid="stDialog"]');
+      if (dlg) {{
+        var node = dlg.parentElement;
+        for (var i = 0; i < 4 && node; i++) {{
+          var kids = node.children || [];
+          for (var j = 0; j < kids.length; j++) {{
+            var kid = kids[j];
+            if (kid === dlg || kid.contains(dlg)) continue;
+            var cs = window.parent.getComputedStyle(kid);
+            if (cs.position === "fixed" && kid.offsetWidth >= (window.parent.innerWidth || 0) * 0.9) {{
+              kid.style.webkitBackdropFilter = "blur(14px) saturate(1.05)";
+              kid.style.backdropFilter = "blur(14px) saturate(1.05)";
+              if (!kid.style.background || kid.style.background === "transparent") {{
+                kid.style.background = "rgba(44, 26, 16, 0.35)";
+              }}
+            }}
+          }}
+          node = node.parentElement;
+        }}
+      }}
+    }} catch (e) {{}}
+  }}
+  fitToViewport();
+  blurBackdrop();
+  setTimeout(fitToViewport, 50);
+  setTimeout(blurBackdrop, 50);
+  setTimeout(fitToViewport, 200);
+  setTimeout(blurBackdrop, 200);
+  try {{
+    window.parent.addEventListener("resize", fitToViewport);
+  }} catch (e3) {{}}
+  window.addEventListener("resize", fitToViewport);
+  window.addEventListener("orientationchange", function() {{
+    setTimeout(fitToViewport, 100);
+  }});
+
   function show(next) {{
     if (!URIS.length) return;
     idx = (next % URIS.length + URIS.length) % URIS.length;
@@ -764,14 +856,34 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Preview dialog: fit viewport; do not scroll the dialog itself — the card iframe scrolls. */
+/* Preview dialog: fit viewport; card iframe owns the only scroll. */
 div[data-testid="stDialog"],
 div[data-testid="stModal"] {
     background: #2C1A10 !important;
     color: #F8E6D2 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
-    max-height: 92vh !important;
+    max-height: min(92dvh, 92vh) !important;
     overflow: hidden !important;
+}
+/* Blur page behind any open dialog (preview / partner). */
+body:has([data-testid="stDialog"]) [data-testid="stAppViewContainer"],
+body:has([data-testid="stModal"]) [data-testid="stAppViewContainer"],
+html:has([data-testid="stDialog"]) [data-testid="stAppViewContainer"] {
+    filter: blur(10px) saturate(0.92);
+    transition: filter 180ms ease;
+}
+[data-testid="stDialogOverlay"],
+.react-aria-ModalOverlay,
+div[data-radix-portal] > div[style*="position: fixed"],
+[data-testid="stDialog"]::backdrop,
+dialog::backdrop {
+    background: rgba(44, 26, 16, 0.42) !important;
+    -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+    backdrop-filter: blur(14px) saturate(1.05) !important;
+}
+div[data-testid="stDialog"] [data-testid="stVerticalBlock"] {
+    max-height: none !important;
+    overflow: visible !important;
 }
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
 div[data-testid="stDialog"] h2,
@@ -787,6 +899,7 @@ div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button 
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
     margin: 0 !important;
+    overflow: hidden !important;
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
     display: block !important;
@@ -794,14 +907,6 @@ div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
     max-width: 100% !important;
     border: none !important;
     background: #2C1A10 !important;
-}
-.preview-body-card {
-    background:
-        linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
-    border-radius: 0 0 18px 18px;
-    padding: 0.85rem 1rem 1.05rem;
-    margin: 0;
-    color: #F8E6D2;
 }
 .preview-body-card .preview-name {
     font-family: 'Cormorant Garamond', Georgia, serif;
