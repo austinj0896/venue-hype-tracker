@@ -369,7 +369,7 @@ def _open_profile_preview_dialog(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Modal profile preview — one viewport-sized card; only the card body scrolls."""
+    """Modal profile preview — card scrolls; Close preview stays outside the iframe."""
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -381,6 +381,14 @@ def _open_profile_preview_dialog(
         relationship_status=relationship_status,
         open_to_dates=open_to_dates,
     )
+    if st.button(
+        "Close preview",
+        key="preview_dialog_close",
+        use_container_width=True,
+        type="primary",
+    ):
+        _dismiss_profile_preview()
+        st.rerun()
 
 
 def render_profile_preview_card(
@@ -395,7 +403,7 @@ def render_profile_preview_card(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Single iframe card: fixed photo + scrolling body + Close. No parent-DOM hacks."""
+    """Single iframe card: fixed photo + scrolling body. Close lives in the dialog below."""
     import json
 
     import streamlit.components.v1 as components
@@ -436,9 +444,9 @@ def render_profile_preview_card(
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
-    # Max iframe height; JS shrinks to the dialog viewport so mobile isn't clipped.
-    shell_h = 720
-    photo_h = 220
+    # Leave room under the iframe for Streamlit's Close preview button.
+    shell_h = 520
+    photo_h = 200
     uri0 = uris[idx] if n and uris[idx] else ""
     img_html = (
         f'<img id="photo" src="{uri0}" alt=""/>'
@@ -477,7 +485,7 @@ def render_profile_preview_card(
     flex-direction: column;
     background: #2C1A10;
     overflow: hidden;
-    border-radius: 18px;
+    border-radius: 18px 18px 0 0;
     box-sizing: border-box;
   }}
   .stage {{
@@ -519,8 +527,9 @@ def render_profile_preview_card(
     overscroll-behavior: contain;
     touch-action: pan-y;
     background: linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
-    padding: 0.85rem 1rem 1.75rem;
+    padding: 0.85rem 1rem 1.5rem;
     box-sizing: border-box;
+    border-radius: 0 0 18px 18px;
   }}
   .preview-name {{
     font-family: Georgia, "Times New Roman", serif;
@@ -545,19 +554,6 @@ def render_profile_preview_card(
     color: #F8E6D2; font-size: 13px;
   }}
   .preview-chip.muted {{ color: rgba(248,230,210,0.55); font-style: italic; }}
-  .footer {{
-    flex: 0 0 auto;
-    padding: 0.55rem 0.75rem calc(0.65rem + env(safe-area-inset-bottom, 0px));
-    background: #5E3F31;
-    border-radius: 0 0 18px 18px;
-  }}
-  .close-btn {{
-    width: 100%; min-height: 44px; border: none; border-radius: 12px;
-    background: #F8E6D2; color: #2C1A10;
-    font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    cursor: pointer; -webkit-tap-highlight-color: transparent;
-  }}
-  .close-btn:active {{ background: #E8D4BC; }}
 </style></head><body>
 <div class="shell" id="shell">
   <div class="stage" id="stage">
@@ -574,9 +570,6 @@ def render_profile_preview_card(
     <div class="preview-group-label">Dietary</div>
     <div class="preview-chips">{diet_html}</div>
   </div>
-  <div class="footer">
-    <button type="button" class="close-btn" id="closeBtn">Close preview</button>
-  </div>
 </div>
 <script>
 (function() {{
@@ -591,16 +584,16 @@ def render_profile_preview_card(
       var dlg = window.parent.document.querySelector('[data-testid="stDialog"]');
       if (dlg) {{
         var r = dlg.getBoundingClientRect();
-        // Content area under dialog title/close row
-        avail = Math.floor((r.height || parentH) - 64);
+        // Title row (~56) + Close preview button (~64) + padding
+        avail = Math.floor((r.height || parentH) - 130);
       }} else {{
-        avail = Math.floor(parentH * 0.86);
+        avail = Math.floor(parentH * 0.72);
       }}
     }} catch (e) {{
-      avail = Math.floor((window.innerHeight || 640) * 0.9);
+      avail = Math.floor((window.innerHeight || 640) * 0.7);
     }}
-    avail = Math.max(400, Math.min(avail, 720));
-    var photoH = avail < 520 ? 160 : (avail < 600 ? 190 : 220);
+    avail = Math.max(320, Math.min(avail, 560));
+    var photoH = avail < 420 ? 150 : (avail < 500 ? 180 : 200);
     var stage = document.getElementById("stage");
     var shell = document.getElementById("shell");
     if (stage) {{
@@ -633,7 +626,6 @@ def render_profile_preview_card(
         el.style.backdropFilter = "blur(14px) saturate(1.05)";
         el.style.background = "rgba(44, 26, 16, 0.42)";
       }});
-      // Underlay sibling often wraps the dialog portal
       var dlg = doc.querySelector('[data-testid="stDialog"]');
       if (dlg) {{
         var node = dlg.parentElement;
@@ -703,31 +695,6 @@ def render_profile_preview_card(
   }}
   bind(document.getElementById("tapL"), -1);
   bind(document.getElementById("tapR"), 1);
-
-  function closePreview() {{
-    try {{
-      var root = window.parent.document;
-      var nodes = root.querySelectorAll(
-        '[data-testid="stDialog"] button[aria-label="Close"],' +
-        '[data-testid="stModal"] button[aria-label="Close"],' +
-        '[data-testid="stDialog"] button[kind="header"]'
-      );
-      for (var i = 0; i < nodes.length; i++) {{
-        nodes[i].click();
-        return;
-      }}
-    }} catch (e) {{}}
-    try {{
-      var u = new URL(window.parent.location.href);
-      u.searchParams.set("{PREVIEW_CLOSE_QP}", "1");
-      window.parent.location.href = u.toString();
-    }} catch (e2) {{}}
-  }}
-  var cb = document.getElementById("closeBtn");
-  if (cb) cb.addEventListener("click", function(e) {{
-    e.preventDefault();
-    closePreview();
-  }});
 }})();
 </script>
 </body></html>""",
@@ -863,7 +830,8 @@ div[data-testid="stModal"] {
     color: #F8E6D2 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
     max-height: min(92dvh, 92vh) !important;
-    overflow: hidden !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
 }
 /* Blur page behind any open dialog (preview / partner). */
 body:has([data-testid="stDialog"]) [data-testid="stAppViewContainer"],
@@ -897,8 +865,27 @@ div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button 
     color: #F8E6D2 !important;
     opacity: 1 !important;
 }
+/* Close preview: always readable on dark dialog */
+div[data-testid="stDialog"] button[kind="primary"],
+div[data-testid="stDialog"] button[data-testid="baseButton-primary"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button {
+    background: #F8E6D2 !important;
+    border: 1px solid rgba(248, 230, 210, 0.55) !important;
+    color: #2C1A10 !important;
+}
+div[data-testid="stDialog"] button[kind="primary"] p,
+div[data-testid="stDialog"] button[kind="primary"] span,
+div[data-testid="stDialog"] button[data-testid="baseButton-primary"] p,
+div[data-testid="stDialog"] button[data-testid="baseButton-primary"] span,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] p,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] span,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button p,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button span {
+    color: #2C1A10 !important;
+}
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
-    margin: 0 !important;
+    margin: 0 0 0.35rem !important;
     overflow: hidden !important;
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
