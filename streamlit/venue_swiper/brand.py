@@ -7,11 +7,12 @@ from functools import lru_cache
 from pathlib import Path
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
-_WORDMARK_PNG = _ASSETS / "apres_wordmark.png"
+_WORDMARK_LIGHT = _ASSETS / "apres_wordmark_light.png"
+_WORDMARK_DARK = _ASSETS / "apres_wordmark_dark.png"
 _WORDMARK_SPLASH = _ASSETS / "apres_wordmark_splash.jpg"
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _data_uri(path: str, mime: str) -> str | None:
     p = Path(path)
     if not p.is_file():
@@ -21,14 +22,22 @@ def _data_uri(path: str, mime: str) -> str | None:
 
 
 def brand_mark_html(*, size: str = "hero") -> str:
-    """HTML for the Après wordmark. size: hero | header."""
+    """HTML for the Après wordmark.
+
+    size:
+      hero   — gold mark on dark splash
+      header — dark metallic mark on cream chrome
+    """
     if size == "hero":
-        uri = _data_uri(str(_WORDMARK_SPLASH), "image/jpeg") or _data_uri(
-            str(_WORDMARK_PNG), "image/png"
+        uri = (
+            _data_uri(str(_WORDMARK_SPLASH), "image/jpeg")
+            or _data_uri(str(_WORDMARK_LIGHT), "image/png")
         )
         cls = "apres-brand-hero"
     else:
-        uri = _data_uri(str(_WORDMARK_PNG), "image/png")
+        uri = _data_uri(str(_WORDMARK_DARK), "image/png") or _data_uri(
+            str(_WORDMARK_LIGHT), "image/png"
+        )
         cls = "apres-brand-header"
 
     if uri:

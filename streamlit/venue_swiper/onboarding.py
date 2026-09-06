@@ -66,10 +66,10 @@ def onboarding_css() -> str:
 }
 .ob-mark,
 .apres-brand-hero {
-    width: min(100%, 280px);
+    width: min(100%, 260px);
     height: auto;
     display: block;
-    margin: 0 auto 1rem;
+    margin: 0 auto 1.1rem;
 }
 .ob-tagline {
     font-family: 'Cormorant Garamond', Georgia, serif;

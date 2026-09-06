@@ -216,20 +216,18 @@ h1, h2, h3 {{
     color: var(--text-mid);
 }}
 .apres-brand-header {{
-    height: 32px;
+    height: 36px;
     width: auto;
-    max-width: 140px;
+    max-width: 160px;
     object-fit: contain;
     object-position: left center;
     display: block;
-    filter: drop-shadow(0 1px 2px rgba(44, 26, 16, 0.15));
 }}
 .apres-brand-hero {{
-    width: min(100%, 300px);
+    width: min(100%, 280px);
     height: auto;
     display: block;
-    margin: 0 auto 0.85rem;
-    border-radius: 4px;
+    margin: 0 auto 0.9rem;
 }}
 .apres-brand-text {{
     font-family: {FONT_DISPLAY};
