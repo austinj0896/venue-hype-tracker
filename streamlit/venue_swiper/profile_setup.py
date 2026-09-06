@@ -369,7 +369,7 @@ def _open_profile_preview_dialog(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Modal profile preview — card includes Close at the bottom."""
+    """Full-width card in the dialog; Close preview is a real Streamlit button under it."""
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -381,6 +381,14 @@ def _open_profile_preview_dialog(
         relationship_status=relationship_status,
         open_to_dates=open_to_dates,
     )
+    if st.button(
+        "Close preview",
+        key="preview_dialog_close",
+        use_container_width=True,
+        type="primary",
+    ):
+        _dismiss_profile_preview()
+        st.rerun()
 
 
 def render_profile_preview_card(
@@ -395,7 +403,7 @@ def render_profile_preview_card(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Single iframe: photo + scrolling body + Close footer (always visible)."""
+    """Full-bleed photo + scrolling body. Close lives under the iframe in the dialog."""
     import json
 
     import streamlit.components.v1 as components
@@ -436,8 +444,9 @@ def render_profile_preview_card(
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
-    shell_h = 400
-    photo_h = 170
+    # Tall enough to fill a phone dialog; JS refines using viewport − title − Close button.
+    shell_h = 560
+    photo_h = 240
     uri0 = uris[idx] if n and uris[idx] else ""
     img_html = (
         f'<img id="photo" src="{uri0}" alt=""/>'
@@ -463,28 +472,30 @@ def render_profile_preview_card(
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
 <style>
   html, body {{
-    margin: 0; padding: 0; height: 100%;
+    margin: 0; padding: 0; width: 100%; height: 100%;
     background: #2C1A10;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     color: #F8E6D2;
     overflow: hidden;
   }}
   .shell {{
+    width: 100%;
     height: {shell_h}px;
     display: flex;
     flex-direction: column;
     background: #2C1A10;
     overflow: hidden;
-    border-radius: 18px;
+    border-radius: 16px;
     box-sizing: border-box;
   }}
   .stage {{
     position: relative;
     flex: 0 0 {photo_h}px;
     height: {photo_h}px;
+    width: 100%;
     background: #2C1A10;
     overflow: hidden;
-    border-radius: 18px 18px 0 0;
+    border-radius: 16px 16px 0 0;
   }}
   .stage img {{
     width: 100%; height: 100%; object-fit: cover; object-position: center 18%;
@@ -511,15 +522,17 @@ def render_profile_preview_card(
   .body {{
     flex: 1 1 auto;
     min-height: 0;
-    height: 0; /* force flex child to respect overflow scroll */
+    height: 0;
+    width: 100%;
     overflow-x: hidden;
     overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
     touch-action: pan-y;
     background: linear-gradient(180deg, #704D3B 0%, #5E3F31 100%);
-    padding: 0.85rem 1rem 1.5rem;
+    padding: 0.9rem 1rem 1.4rem;
     box-sizing: border-box;
+    border-radius: 0 0 16px 16px;
   }}
   .preview-name {{
     font-family: Georgia, "Times New Roman", serif;
@@ -544,22 +557,6 @@ def render_profile_preview_card(
     color: #F8E6D2; font-size: 13px;
   }}
   .preview-chip.muted {{ color: rgba(248,230,210,0.55); font-style: italic; }}
-  .footer {{
-    flex: 0 0 auto;
-    padding: 0.55rem 0.75rem 0.7rem;
-    background: #5E3F31;
-    border-radius: 0 0 18px 18px;
-    border-top: 1px solid rgba(248,230,210,0.1);
-  }}
-  .close-btn {{
-    display: block; width: 100%; box-sizing: border-box;
-    min-height: 44px; border: none; border-radius: 12px;
-    background: #F8E6D2; color: #2C1A10;
-    font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    letter-spacing: 0.01em;
-    cursor: pointer; -webkit-tap-highlight-color: transparent;
-  }}
-  .close-btn:active {{ background: #E8D4BC; }}
 </style></head><body>
 <div class="shell" id="shell">
   <div class="stage" id="stage">
@@ -575,10 +572,7 @@ def render_profile_preview_card(
     <div class="preview-chips">{act_html}</div>
     <div class="preview-group-label">Dietary</div>
     <div class="preview-chips">{diet_html}</div>
-    <div style="height:12px" aria-hidden="true"></div>
-  </div>
-  <div class="footer" id="footer">
-    <button type="button" class="close-btn" id="closeBtn">Close preview</button>
+    <div style="height:16px" aria-hidden="true"></div>
   </div>
 </div>
 <script>
@@ -588,40 +582,66 @@ def render_profile_preview_card(
   var img = document.getElementById("photo");
 
   function fitToViewport() {{
-    // CRITICAL: never size the card near full viewport height — Streamlit dialog
-    // chrome + max-height:92vh will clip the Close footer and the end of Dietary.
-    var parentH = 640;
+    var parentH = 700;
     try {{
       parentH = window.parent.innerHeight
         || window.parent.document.documentElement.clientHeight
-        || 640;
+        || 700;
     }} catch (e) {{
-      parentH = window.innerHeight || 640;
+      parentH = window.innerHeight || 700;
     }}
-    var fromDialog = Math.floor(parentH * 0.92 - 72);
-    var fromSafe = Math.floor(parentH * 0.68);
-    var avail = Math.max(300, Math.min(fromDialog, fromSafe, 480));
-    var photoH = avail < 380 ? 140 : (avail < 440 ? 160 : 180);
+    // Fill the dialog: viewport dialog max (~92%) minus title + Close button + padding.
+    // Do NOT use a tiny fraction — that left the empty cream gap in screenshots.
+    var avail = Math.floor(parentH * 0.92 - 140);
+    avail = Math.max(380, Math.min(avail, 620));
+    var photoH = avail < 420 ? 180 : (avail < 520 ? 220 : 260);
     var stage = document.getElementById("stage");
     var shell = document.getElementById("shell");
     if (stage) {{
       stage.style.flex = "0 0 " + photoH + "px";
       stage.style.height = photoH + "px";
     }}
-    if (shell) shell.style.height = avail + "px";
+    if (shell) {{
+      shell.style.height = avail + "px";
+      shell.style.width = "100%";
+    }}
     var frame = window.frameElement;
     if (frame) {{
       frame.style.height = avail + "px";
+      frame.style.width = "100%";
       frame.setAttribute("height", String(avail));
+      frame.setAttribute("width", "100%");
       try {{
         var wrap = frame.parentElement;
-        if (wrap) {{
-          wrap.style.height = avail + "px";
-          wrap.style.maxHeight = avail + "px";
-          wrap.style.overflow = "hidden";
+        while (wrap && wrap !== window.parent.document.body) {{
+          wrap.style.width = "100%";
+          wrap.style.maxWidth = "100%";
+          if (wrap.getAttribute && wrap.getAttribute("data-testid") === "stCustomComponentV1") {{
+            wrap.style.height = avail + "px";
+            wrap.style.overflow = "hidden";
+            break;
+          }}
+          wrap = wrap.parentElement;
         }}
       }} catch (e2) {{}}
     }}
+    try {{
+      var doc = window.parent.document;
+      var dlg = doc.querySelector('[data-testid="stDialog"]');
+      if (dlg) {{
+        dlg.style.background = "#2C1A10";
+        dlg.style.padding = "0.55rem 0.65rem 0.75rem";
+        dlg.style.width = "min(100vw - 1.25rem, 28rem)";
+        dlg.style.maxWidth = "calc(100vw - 1.25rem)";
+        var nodes = dlg.querySelectorAll("div, section");
+        for (var i = 0; i < Math.min(nodes.length, 40); i++) {{
+          var bg = window.parent.getComputedStyle(nodes[i]).backgroundColor;
+          if (bg && (bg.indexOf("248") >= 0 || bg.indexOf("255") >= 0 || bg === "rgb(255, 255, 255)")) {{
+            nodes[i].style.background = "#2C1A10";
+          }}
+        }}
+      }}
+    }} catch (e3) {{}}
   }}
   function blurBackdrop() {{
     try {{
@@ -634,45 +654,17 @@ def render_profile_preview_card(
         el.style.backdropFilter = "blur(14px) saturate(1.05)";
         el.style.background = "rgba(44, 26, 16, 0.42)";
       }});
-      var dlg = doc.querySelector('[data-testid="stDialog"]');
-      if (dlg) {{
-        dlg.style.background = "#2C1A10";
-        dlg.style.padding = "0.4rem";
-        dlg.style.maxHeight = "92vh";
-        dlg.style.overflow = "hidden";
-        var node = dlg.parentElement;
-        for (var i = 0; i < 4 && node; i++) {{
-          var kids = node.children || [];
-          for (var j = 0; j < kids.length; j++) {{
-            var kid = kids[j];
-            if (kid === dlg || kid.contains(dlg)) continue;
-            var cs = window.parent.getComputedStyle(kid);
-            if (cs.position === "fixed" && kid.offsetWidth >= (window.parent.innerWidth || 0) * 0.9) {{
-              kid.style.webkitBackdropFilter = "blur(14px) saturate(1.05)";
-              kid.style.backdropFilter = "blur(14px) saturate(1.05)";
-              if (!kid.style.background || kid.style.background === "transparent") {{
-                kid.style.background = "rgba(44, 26, 16, 0.35)";
-              }}
-            }}
-          }}
-          node = node.parentElement;
-        }}
-      }}
     }} catch (e) {{}}
   }}
   fitToViewport();
   blurBackdrop();
   setTimeout(fitToViewport, 50);
   setTimeout(blurBackdrop, 50);
-  setTimeout(fitToViewport, 200);
-  setTimeout(blurBackdrop, 200);
+  setTimeout(fitToViewport, 250);
   try {{
     window.parent.addEventListener("resize", fitToViewport);
-  }} catch (e3) {{}}
+  }} catch (e4) {{}}
   window.addEventListener("resize", fitToViewport);
-  window.addEventListener("orientationchange", function() {{
-    setTimeout(fitToViewport, 100);
-  }});
 
   function show(next) {{
     if (!URIS.length) return;
@@ -707,31 +699,6 @@ def render_profile_preview_card(
   }}
   bind(document.getElementById("tapL"), -1);
   bind(document.getElementById("tapR"), 1);
-
-  function closePreview() {{
-    try {{
-      var root = window.parent.document;
-      var nodes = root.querySelectorAll(
-        '[data-testid="stDialog"] button[aria-label="Close"],' +
-        '[data-testid="stModal"] button[aria-label="Close"],' +
-        '[data-testid="stDialog"] button[kind="header"]'
-      );
-      for (var i = 0; i < nodes.length; i++) {{
-        nodes[i].click();
-        return;
-      }}
-    }} catch (e) {{}}
-    try {{
-      var u = new URL(window.parent.location.href);
-      u.searchParams.set("{PREVIEW_CLOSE_QP}", "1");
-      window.parent.location.href = u.toString();
-    }} catch (e2) {{}}
-  }}
-  var cb = document.getElementById("closeBtn");
-  if (cb) cb.addEventListener("click", function(e) {{
-    e.preventDefault();
-    closePreview();
-  }});
 }})();
 </script>
 </body></html>""",
@@ -860,14 +827,18 @@ div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
     background: transparent !important;
 }
-/* Preview dialog: fit viewport; card iframe owns the only scroll. */
+/* Preview dialog: dark shell, full-bleed card, Close button under the card. */
 div[data-testid="stDialog"],
 div[data-testid="stModal"] {
     background: #2C1A10 !important;
     color: #F8E6D2 !important;
     border: 1px solid rgba(248, 230, 210, 0.12) !important;
     max-height: min(92dvh, 92vh) !important;
-    overflow: hidden !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 0.55rem 0.65rem 0.75rem !important;
+    width: min(100vw - 1.25rem, 28rem) !important;
+    max-width: calc(100vw - 1.25rem) !important;
 }
 /* Blur page behind any open dialog (preview / partner). */
 body:has([data-testid="stDialog"]) [data-testid="stAppViewContainer"],
@@ -888,6 +859,7 @@ dialog::backdrop {
 div[data-testid="stDialog"] [data-testid="stVerticalBlock"] {
     max-height: none !important;
     overflow: visible !important;
+    gap: 0.45rem !important;
 }
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
 div[data-testid="stDialog"] h2,
@@ -901,8 +873,32 @@ div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button 
     color: #F8E6D2 !important;
     opacity: 1 !important;
 }
+/* Close preview under the card */
+div[data-testid="stDialog"] button[kind="primary"],
+div[data-testid="stDialog"] button[data-testid="baseButton-primary"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"],
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button {
+    background: #F8E6D2 !important;
+    border: none !important;
+    color: #2C1A10 !important;
+    border-radius: 12px !important;
+    min-height: 44px !important;
+    font-weight: 600 !important;
+}
+div[data-testid="stDialog"] button[kind="primary"] p,
+div[data-testid="stDialog"] button[kind="primary"] span,
+div[data-testid="stDialog"] button[data-testid="baseButton-primary"] p,
+div[data-testid="stDialog"] button[data-testid="baseButton-primary"] span,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] p,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] span,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button p,
+div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button span {
+    color: #2C1A10 !important;
+}
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
     margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
     overflow: hidden !important;
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
