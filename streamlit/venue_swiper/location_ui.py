@@ -121,7 +121,7 @@ def render_location_picker(*, borough: str) -> UserLocation | None:
     saved = get_saved_location()
 
     st.markdown(
-        '<p class="swipe-hint">Where will you start the evening?</p>',
+        '<p class="swipe-hint">Where will you start?</p>',
         unsafe_allow_html=True,
     )
 

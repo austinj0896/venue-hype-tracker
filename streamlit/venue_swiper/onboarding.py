@@ -1,7 +1,7 @@
 """01 · ONBOARDING — splash + three pre-signup slides (Après-branded).
 
-Deck intent: sell the product before account creation. Returning users can
-Sign in and skip slides. Soft email auth only (no OTP yet).
+Deck intent: sell the product before account creation. Splash always shows;
+Sign in is opt-in from splash or the last slide. Soft email auth only (no OTP yet).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from html import escape
 import streamlit as st
 
 from app_log import log_event
-from apres_returning import mark_returning, read_returning_flag
+from brand import brand_mark_html
 
 ONBOARDING_DONE_KEY = "apres_onboarding_done"
 ONBOARDING_STEP_KEY = "apres_onboarding_step"
@@ -21,7 +21,7 @@ _SLIDES = (
     {
         "eyebrow": "Slide 1",
         "title": "Tell us what you love.",
-        "body": "Rate places you’ve been. Your scores become the base for better nights out.",
+        "body": "Rate places you’ve been. Your scores become the base for better picks.",
         "cta": "Next",
     },
     {
@@ -48,24 +48,32 @@ def onboarding_css() -> str:
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 2.5rem 1rem 1.25rem;
+    padding: 2rem 1rem 1.5rem;
+    margin: 0.25rem 0 1rem;
+    border-radius: 20px;
+    background:
+        radial-gradient(120% 80% at 50% 20%, rgba(211,163,69,0.18) 0%, transparent 55%),
+        linear-gradient(180deg, #2A1A12 0%, #1A100C 55%, #120C09 100%);
+    border: 1px solid rgba(211, 163, 69, 0.18);
+    box-shadow: 0 18px 40px rgba(44, 26, 16, 0.18);
     animation: apres-fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.ob-mark {
-    font-family: 'Cormorant Garamond', Georgia, serif;
-    font-size: clamp(42px, 12vw, 56px);
-    font-weight: 500;
-    font-style: italic;
-    color: #704D3B;
-    letter-spacing: -0.02em;
-    margin: 0 0 0.75rem;
+.ob-mark,
+.apres-brand-hero {
+    width: min(100%, 280px);
+    height: auto;
+    display: block;
+    margin: 0 auto 1rem;
 }
 .ob-tagline {
-    font-size: 15px;
-    line-height: 1.45;
-    color: #7A5B48;
-    margin: 0 0 1.75rem;
-    max-width: 16rem;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 16px;
+    font-style: italic;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    color: rgba(248, 230, 210, 0.78);
+    margin: 0 0 1.5rem;
+    max-width: 18rem;
 }
 .ob-pulse {
     width: 10px;
@@ -156,27 +164,13 @@ def go_to_sign_in(*, returning: bool = True) -> None:
 def render_onboarding() -> None:
     st.markdown(f"<style>{onboarding_css()}</style>", unsafe_allow_html=True)
 
-    # Device memory: returning visitors skip marketing slides.
-    if "apres_returning_checked" not in st.session_state:
-        flag = read_returning_flag()
-        if flag is None:
-            # Component still loading; show splash shell without blocking forever.
-            pass
-        else:
-            st.session_state["apres_returning_checked"] = True
-            if flag and not st.session_state.get(ONBOARDING_DONE_KEY):
-                st.session_state[ONBOARDING_DONE_KEY] = True
-                st.session_state[LOGIN_MODE_KEY] = "returning"
-                log_event("onboarding", "Returning device; skip slides")
-                st.rerun()
-
     step = int(st.session_state.get(ONBOARDING_STEP_KEY, 0))
 
     if step <= 0:
         st.markdown(
             '<div class="ob-splash">'
-            '<div class="ob-mark">Après</div>'
-            '<div class="ob-tagline">Your evening, sorted.</div>'
+            f"{brand_mark_html(size='hero')}"
+            '<div class="ob-tagline">Find what comes next.</div>'
             '<div class="ob-pulse" aria-hidden="true"></div>'
             "</div>",
             unsafe_allow_html=True,
@@ -236,10 +230,3 @@ def _advance(idx: int) -> None:
         log_event("onboarding", f"Advance to slide {idx + 2}")
     st.rerun()
 
-
-def remember_device_after_login() -> None:
-    """Call after a successful email login so next visit skips slides."""
-    try:
-        mark_returning()
-    except Exception:
-        pass

@@ -1,6 +1,6 @@
 """
 Après — discover and rate food & drink spots by neighborhood.
-Tagline: Your evening, sorted.
+Tagline: Find what comes next.
 
 Runs on **Neon Postgres** (Streamlit Community Cloud) or **Snowflake** (SiS / legacy Cloud).
 """
@@ -48,6 +48,7 @@ from date_planner import (
 from geo import filter_by_radius, miles_to_meters
 from location_ui import render_location_picker
 from app_log import log_event, show_recent_errors
+from brand import brand_mark_html
 from greeting import personalized_greeting
 from onboarding import onboarding_complete, render_onboarding
 from places_data import fetch_community_ratings, fetch_venues_with_coords
@@ -108,9 +109,11 @@ ALLOWED_PRIMARY_TYPES = (
 )
 
 FONT_SERIF = "'Cormorant Garamond', Georgia, 'Times New Roman', serif"
+FONT_DISPLAY = "'Bodoni Moda', 'Cormorant Garamond', Georgia, serif"
 FONT_SANS = "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
 FONT_URL = (
     "https://fonts.googleapis.com/css2?"
+    "family=Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,500;0,6..96,600;1,6..96,400;1,6..96,500&"
     "family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&"
     "family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&"
     "display=swap"
@@ -206,6 +209,46 @@ h1, h2, h3 {{
     letter-spacing: 0.01em;
     text-transform: none;
     color: var(--text-mid);
+}}
+.apres-brand-header {{
+    height: 32px;
+    width: auto;
+    max-width: 140px;
+    object-fit: contain;
+    object-position: left center;
+    display: block;
+    filter: drop-shadow(0 1px 2px rgba(44, 26, 16, 0.15));
+}}
+.apres-brand-hero {{
+    width: min(100%, 300px);
+    height: auto;
+    display: block;
+    margin: 0 auto 0.85rem;
+    border-radius: 4px;
+}}
+.apres-brand-text {{
+    font-family: {FONT_DISPLAY};
+    font-weight: 500;
+    font-style: italic;
+    letter-spacing: -0.02em;
+    background: linear-gradient(
+        180deg,
+        #F8F0E0 0%,
+        #E8D4A8 28%,
+        #D3A345 55%,
+        #A67C3A 78%,
+        #C9A46A 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    text-shadow: none;
+    filter: drop-shadow(0 2px 8px rgba(44, 26, 16, 0.25));
+}}
+.apres-status .apres-brand-text {{
+    font-size: 22px;
+    line-height: 1;
 }}
 .apres-greeting {{
     font-family: {FONT_SERIF};
@@ -1250,11 +1293,12 @@ def show_data_error(exc: Exception) -> None:
 
 
 def render_apres_header(subtitle: str = "Manhattan Beach", photo_uri: str | None = None) -> None:
+    mark = brand_mark_html(size="header")
     st.markdown(
-        """
+        f"""
         <div class="apres-status">
-            <span>Apr&egrave;s</span>
-            <span class="tagline">Your evening, sorted.</span>
+            {mark}
+            <span class="tagline">Find what comes next.</span>
             <span>&middot;</span>
         </div>
         """,
@@ -1935,7 +1979,7 @@ def render_plan_date(email: str) -> None:
 
     st.markdown('<div class="section-label">Plan a date</div>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="swipe-hint">Build a two-stop evening. Re-roll, swap stops, then save a time.</p>',
+        '<p class="swipe-hint">Build a two-stop plan. Re-roll, swap stops, then save a time.</p>',
         unsafe_allow_html=True,
     )
 
@@ -2105,12 +2149,6 @@ def render_login() -> None:
             return
         st.session_state["user_email"] = email
         clear_discover_venue()
-        try:
-            from onboarding import remember_device_after_login
-
-            remember_device_after_login()
-        except Exception:
-            pass
         log_event("login_ok", "Email accepted; entering app", email=email)
         st.rerun()
 
