@@ -30,6 +30,7 @@ DRAFT_KEY = "profile_draft"
 STEP_KEY = "profile_setup_step"
 PREVIEW_OPEN_KEY = "apres_profile_preview_open"
 PREVIEW_IDX_KEY = "apres_preview_photo_idx"
+PREVIEW_QP = "apres_p"
 PROFILE_FLASH_KEY = "apres_profile_flash"
 
 
@@ -300,6 +301,33 @@ def _chips_html(items: list[str]) -> str:
     return "".join(bits)
 
 
+def _dismiss_profile_preview() -> None:
+    st.session_state[PREVIEW_OPEN_KEY] = False
+
+
+@st.dialog("Preview", width="large", on_dismiss=_dismiss_profile_preview)
+def _open_profile_preview_dialog(
+    *,
+    first_name: str,
+    city: str,
+    neighbourhood: str,
+    dietary: list[str],
+    activities: list[str],
+    photos: list[dict[str, Any]],
+    date_of_birth: Any = None,
+) -> None:
+    """Modal profile preview — dismiss via X, Escape, or click outside."""
+    render_profile_preview_card(
+        first_name=first_name,
+        city=city,
+        neighbourhood=neighbourhood,
+        dietary=dietary,
+        activities=activities,
+        photos=photos,
+        date_of_birth=date_of_birth,
+    )
+
+
 def render_profile_preview_card(
     *,
     first_name: str,
@@ -310,8 +338,25 @@ def render_profile_preview_card(
     photos: list[dict[str, Any]],
     date_of_birth: Any = None,
 ) -> None:
-    """Dating-app style preview: photo stack + concise identity / taste."""
+    """Dating-app preview: dark card; tap left/right half of the photo to flip."""
+    import streamlit.components.v1 as components
+
     n = len(photos)
+
+    # Side-taps navigate via ?apres_p=<index> (set from the photo iframe).
+    try:
+        raw = st.query_params.get(PREVIEW_QP)
+        if raw is not None and n > 0:
+            if isinstance(raw, (list, tuple)):
+                raw = raw[0] if raw else "0"
+            st.session_state[PREVIEW_IDX_KEY] = int(str(raw)) % n
+            try:
+                del st.query_params[PREVIEW_QP]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     idx = int(st.session_state.get(PREVIEW_IDX_KEY, 0) or 0)
     if n:
         idx = max(0, min(n - 1, idx))
@@ -328,75 +373,193 @@ def render_profile_preview_card(
     place_bits = [b for b in [(neighbourhood or "").strip(), (city or "").strip()] if b]
     place = escape(" · ".join(place_bits)) if place_bits else "Somewhere great"
 
-    if n:
-        photo = photos[idx]
-        uri = photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME"))
-        img_html = (
-            f'<img class="preview-photo" src="{uri}" alt="" />'
-            if uri
-            else '<div class="preview-photo preview-photo-empty">No photo</div>'
-        )
-        segments = "".join(
-            f'<span class="preview-seg{" on" if i == idx else ""}"></span>' for i in range(n)
-        )
-        seg_html = f'<div class="preview-segments" aria-hidden="true">{segments}</div>'
-    else:
-        img_html = '<div class="preview-photo preview-photo-empty">Add photos to fill this card</div>'
-        seg_html = ""
-
     diet_html = _chips_html([d for d in dietary if d and d != "None"]) or (
-        '<span class="preview-chip muted">Open to anything</span>'
+        '<span class="chip muted">Open to anything</span>'
         if "None" in dietary or not dietary
         else ""
     )
+    # Reuse chip helper class names for iframe CSS
+    diet_html = diet_html.replace("preview-chip", "chip")
     act_html = _chips_html(list(activities)) or (
         '<span class="preview-chip muted">Still figuring it out</span>'
     )
+    act_html = act_html.replace("preview-chip", "chip")
 
-    st.markdown(
-        f"""
-        <div class="preview-card">
-          <div class="preview-photo-stage">
-            {seg_html}
-            {img_html}
-          </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    photo_h = 360
+    if n:
+        photo = photos[idx]
+        uri = photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or ""
+        segments = "".join(
+            f'<span class="seg{" on" if i == idx else ""}"></span>' for i in range(n)
+        )
+        prev_i = (idx - 1) % n
+        next_i = (idx + 1) % n
+        if uri:
+            img_html = f'<img src="{uri}" alt=""/>'
+        else:
+            img_html = '<div class="empty">No photo</div>'
+        taps = (
+            f'<a class="tap left" id="tapL" target="_parent" href="#" aria-label="Previous photo"></a>'
+            f'<a class="tap right" id="tapR" target="_parent" href="#" aria-label="Next photo"></a>'
+            if n > 1
+            else ""
+        )
+        seg_html = f'<div class="segs">{segments}</div>'
+        nav_script = f"""
+<script>
+(function() {{
+  function hrefFor(i) {{
+    try {{
+      var u = new URL(window.parent.location.href);
+      u.searchParams.set("{PREVIEW_QP}", String(i));
+      return u.toString();
+    }} catch (e) {{
+      return "?{PREVIEW_QP}=" + String(i);
+    }}
+  }}
+  var L = document.getElementById("tapL");
+  var R = document.getElementById("tapR");
+  if (L) L.setAttribute("href", hrefFor({prev_i}));
+  if (R) R.setAttribute("href", hrefFor({next_i}));
+}})();
+</script>
+"""
+    else:
+        img_html = '<div class="empty">Add photos to fill this card</div>'
+        taps = ""
+        seg_html = ""
+        nav_script = ""
 
-    if n > 1:
-        left, right = st.columns(2, gap="small")
-        with left:
-            if st.button(
-                "\u200b",
-                key="preview_tap_left",
-                use_container_width=True,
-            ):
-                st.session_state[PREVIEW_IDX_KEY] = (idx - 1) % n
-                st.rerun()
-        with right:
-            if st.button(
-                "\u200b",
-                key="preview_tap_right",
-                use_container_width=True,
-            ):
-                st.session_state[PREVIEW_IDX_KEY] = (idx + 1) % n
-                st.rerun()
-
-    st.markdown(
-        f"""
-          <div class="preview-body">
-            <div class="preview-eyebrow">How others see you</div>
-            <div class="preview-name">{title}</div>
-            <div class="preview-place">{place}</div>
-            <div class="preview-group-label">Into</div>
-            <div class="preview-chips">{act_html}</div>
-            <div class="preview-group-label">Dietary</div>
-            <div class="preview-chips">{diet_html}</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    # Entire card in one iframe so Streamlit theme never washes out cream-on-cream.
+    frame_h = photo_h + 240
+    components.html(
+        f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+  html, body {{
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+  }}
+  .card {{
+    background:
+      linear-gradient(165deg, rgba(211,163,69,0.18) 0%, transparent 38%),
+      linear-gradient(180deg, #7A5643 0%, #704D3B 55%, #5E3F31 100%);
+    border-radius: 22px;
+    border: 1px solid rgba(248, 230, 210, 0.12);
+    overflow: hidden;
+    color: #F8E6D2;
+  }}
+  .stage {{
+    position: relative;
+    width: 100%;
+    height: {photo_h}px;
+    background: #2C1A10;
+    overflow: hidden;
+  }}
+  .stage img {{
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    pointer-events: none;
+    user-select: none;
+  }}
+  .empty {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: rgba(248,230,210,0.55);
+    font-size: 15px;
+    padding: 1.5rem;
+    text-align: center;
+  }}
+  .segs {{
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    display: flex;
+    gap: 4px;
+    z-index: 3;
+    pointer-events: none;
+  }}
+  .seg {{
+    flex: 1;
+    height: 3px;
+    border-radius: 99px;
+    background: rgba(248,230,210,0.28);
+  }}
+  .seg.on {{ background: #F8E6D2; }}
+  .tap {{
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 50%;
+    z-index: 4;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }}
+  .tap.left {{ left: 0; }}
+  .tap.right {{ right: 0; }}
+  .tap:active {{ background: rgba(248,230,210,0.12); }}
+  .body {{ padding: 1.1rem 1.15rem 1.3rem; }}
+  .name {{
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 30px;
+    font-weight: 500;
+    font-style: italic;
+    color: #F8E6D2;
+    line-height: 1.1;
+    margin: 0 0 0.3rem;
+  }}
+  .place {{
+    font-size: 14px;
+    color: rgba(248,230,210,0.72);
+    margin: 0 0 0.85rem;
+  }}
+  .label {{
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(248,230,210,0.45);
+    margin: 0.55rem 0 0.35rem;
+  }}
+  .chips {{ display: flex; flex-wrap: wrap; gap: 0.35rem; }}
+  .chip {{
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 0.25rem 0.65rem;
+    border-radius: 999px;
+    background: rgba(248,230,210,0.1);
+    border: 1px solid rgba(248,230,210,0.14);
+    color: #F8E6D2;
+    font-size: 13px;
+  }}
+  .chip.muted {{ color: rgba(248,230,210,0.55); }}
+</style></head><body>
+<div class="card">
+  <div class="stage">
+    {seg_html}
+    {img_html}
+    {taps}
+  </div>
+  <div class="body">
+    <div class="name">{title}</div>
+    <div class="place">{place}</div>
+    <div class="label">Into</div>
+    <div class="chips">{act_html}</div>
+    <div class="label">Dietary</div>
+    <div class="chips">{diet_html}</div>
+  </div>
+</div>
+{nav_script}
+</body></html>""",
+        height=frame_h,
+        scrolling=False,
     )
 
 
@@ -512,150 +675,13 @@ def profile_setup_css() -> str:
     gap: 0.85rem;
     margin: 0 0 0.25rem 0;
 }
-.preview-card {
-    background:
-        linear-gradient(165deg, rgba(211,163,69,0.18) 0%, transparent 38%),
-        linear-gradient(180deg, #7A5643 0%, #704D3B 55%, #5E3F31 100%);
-    border-radius: 22px;
-    border: 1px solid rgba(248, 230, 210, 0.1);
-    box-shadow: 0 4px 8px rgba(44,26,16,0.05), 0 24px 48px rgba(44,26,16,0.14),
-        inset 0 1px 0 rgba(248,230,210,0.1);
-    overflow: hidden;
+/* Preview card lives in components.html; keep chip helper styles for markdown fallbacks. */
+div[data-testid="stCustomComponentV1"] {
     margin: 0.35rem 0 0.85rem;
-    animation: apres-card-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.preview-photo-stage {
-    position: relative;
-    background: #2C1A10;
-    min-height: 340px;
-}
-.preview-photo {
-    width: 100%;
-    height: min(62vh, 420px);
-    object-fit: cover;
-    display: block;
-    pointer-events: none;
-    user-select: none;
-}
-/* Tap zones: the column row directly under the photo stage markdown */
-div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] {
-    margin-top: calc(-1 * min(62vh, 420px)) !important;
-    margin-bottom: 0 !important;
-    height: min(62vh, 420px);
-    position: relative;
-    z-index: 12;
-    gap: 0 !important;
-}
-div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] > div {
-    padding: 0 !important;
-}
-div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] .stButton {
-    height: 100%;
-}
-div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"] .stButton > button {
-    height: min(62vh, 420px) !important;
-    min-height: min(62vh, 420px) !important;
-    background: transparent !important;
+div[data-testid="stCustomComponentV1"] iframe {
     border: none !important;
-    box-shadow: none !important;
-    color: transparent !important;
-    cursor: pointer;
-}
-div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"]
-  > div:first-child .stButton > button:hover {
-    background: linear-gradient(90deg, rgba(248,230,210,0.14), transparent 72%) !important;
-}
-div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"]
-  > div:last-child .stButton > button:hover {
-    background: linear-gradient(270deg, rgba(248,230,210,0.14), transparent 72%) !important;
-}
-div[data-testid="stMarkdown"]:has(.preview-photo-stage) + div[data-testid="stHorizontalBlock"]
-  .stButton > button:focus {
-    outline: none !important;
-    box-shadow: none !important;
-}
-/* Body markdown closes the card visually under the overlay */
-div[data-testid="stMarkdown"]:has(.preview-body) {
-    position: relative;
-    z-index: 2;
-}
-.preview-photo-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 280px;
-    color: rgba(248,230,210,0.55);
-    font-size: 15px;
-    padding: 1.5rem;
-    text-align: center;
-}
-.preview-segments {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    right: 10px;
-    display: flex;
-    gap: 4px;
-    z-index: 2;
-}
-.preview-seg {
-    flex: 1;
-    height: 3px;
-    border-radius: 999px;
-    background: rgba(248,230,210,0.28);
-}
-.preview-seg.on {
-    background: #F8E6D2;
-    box-shadow: 0 0 0 1px rgba(211,163,69,0.35);
-}
-.preview-count {
-    position: absolute;
-    right: 12px;
-    bottom: 12px;
-    z-index: 2;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    color: #F8E6D2;
-    background: rgba(44,26,16,0.45);
-    padding: 0.35rem 0.55rem;
-    border-radius: 999px;
-}
-.preview-body {
-    padding: 1.15rem 1.2rem 1.35rem;
-}
-.preview-eyebrow {
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: #D3A345;
-    margin: 0 0 0.45rem;
-}
-.preview-name {
-    font-family: 'Cormorant Garamond', Georgia, serif;
-    font-size: clamp(28px, 7vw, 34px);
-    font-weight: 500;
-    font-style: italic;
-    color: #F8E6D2;
-    line-height: 1.1;
-    margin: 0 0 0.35rem;
-}
-.preview-place {
-    font-size: 14px;
-    color: rgba(248,230,210,0.72);
-    margin: 0 0 1rem;
-}
-.preview-group-label {
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: rgba(248,230,210,0.45);
-    margin: 0.65rem 0 0.4rem;
-}
-.preview-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
+    background: transparent !important;
 }
 .preview-chip {
     display: inline-flex;
@@ -1059,22 +1085,15 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     _hydrate_draft_photos(email, draft, profile)
 
     preview_open = bool(st.session_state.get(PREVIEW_OPEN_KEY))
-    toggle_cols = st.columns([1, 1])
-    with toggle_cols[0]:
-        if preview_open:
-            if st.button("Close preview", use_container_width=True, key="preview_close"):
-                st.session_state[PREVIEW_OPEN_KEY] = False
-                st.rerun()
-        else:
-            if st.button(
-                "Preview as others see you",
-                type="primary",
-                use_container_width=True,
-                key="preview_open",
-            ):
-                st.session_state[PREVIEW_OPEN_KEY] = True
-                st.session_state[PREVIEW_IDX_KEY] = 0
-                st.rerun()
+    if st.button(
+        "Preview as others see you",
+        type="primary",
+        use_container_width=True,
+        key="preview_open",
+    ):
+        st.session_state[PREVIEW_OPEN_KEY] = True
+        st.session_state[PREVIEW_IDX_KEY] = 0
+        preview_open = True
 
     if preview_open:
         # Prefer live form values when present (from prior run / current widgets).
@@ -1108,7 +1127,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         if st.session_state.get("edit_add_dob") and st.session_state.get("edit_dob"):
             dob_live = st.session_state.get("edit_dob")
 
-        render_profile_preview_card(
+        _open_profile_preview_dialog(
             first_name=first_live,
             city=city_live,
             neighbourhood=hood_live,
@@ -1117,7 +1136,6 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
             photos=list(draft.get("photos") or []),
             date_of_birth=dob_live,
         )
-        st.markdown("---")
 
     st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
     st.markdown(
