@@ -48,6 +48,8 @@ from date_planner import (
 from geo import filter_by_radius, miles_to_meters
 from location_ui import render_location_picker
 from places_data import fetch_community_ratings, fetch_venues_with_coords
+from profile_setup import render_profile_settings, render_profile_setup
+from user_profiles_store import fetch_profile, is_profile_complete
 from planned_dates_store import fetch_planned_dates, save_planned_date
 
 DEFAULT_BOROUGH = "Manhattan Beach"
@@ -1858,7 +1860,25 @@ def main() -> None:
         return
 
     email = st.session_state["user_email"]
-    display_name = email.split("@")[0].replace(".", " ").title()
+
+    profile = fetch_profile(email)
+    if not is_profile_complete(profile):
+        # Existing raters without a complete profile still hit setup.
+        _, sign_out_col = st.columns([4, 1])
+        with sign_out_col:
+            if st.button("Sign out", type="secondary", use_container_width=True, key="setup_sign_out"):
+                clear_discover_venue()
+                st.session_state.pop("profile_draft", None)
+                st.session_state.pop("profile_setup_step", None)
+                del st.session_state["user_email"]
+                st.rerun()
+        if not verify_data_access():
+            return
+        render_profile_setup(email, profile)
+        return
+
+    first = (profile or {}).get("FIRST_NAME") or ""
+    display_name = first or email.split("@")[0].replace(".", " ").title()
 
     render_apres_header(f"Good evening, {display_name}.")
     st.markdown(
@@ -1870,14 +1890,16 @@ def main() -> None:
     with sign_out_col:
         if st.button("Sign out", type="secondary", use_container_width=True):
             clear_discover_venue()
+            st.session_state.pop("profile_draft", None)
+            st.session_state.pop("profile_setup_step", None)
             del st.session_state["user_email"]
             st.rerun()
 
     if not verify_data_access():
         return
 
-    tab_discover, tab_plan, tab_rated, tab_skipped = st.tabs(
-        ["Discover", "Plan a date", "My ratings", "Skipped"]
+    tab_discover, tab_plan, tab_rated, tab_skipped, tab_profile = st.tabs(
+        ["Discover", "Plan a date", "My ratings", "Skipped", "Profile"]
     )
 
     with tab_discover:
@@ -1891,6 +1913,9 @@ def main() -> None:
 
     with tab_skipped:
         render_skipped_list(email)
+
+    with tab_profile:
+        render_profile_settings(email, profile or {})
 
 
 if __name__ == "__main__":
