@@ -369,7 +369,15 @@ def _open_profile_preview_dialog(
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
 ) -> None:
-    """Modal profile preview — card scrolls; Close preview stays outside the iframe."""
+    """Modal profile preview — Close stays above the card so it isn't clipped on mobile."""
+    if st.button(
+        "Close preview",
+        key="preview_dialog_close",
+        use_container_width=True,
+        type="primary",
+    ):
+        _dismiss_profile_preview()
+        st.rerun()
     render_profile_preview_card(
         first_name=first_name,
         city=city,
@@ -381,14 +389,6 @@ def _open_profile_preview_dialog(
         relationship_status=relationship_status,
         open_to_dates=open_to_dates,
     )
-    if st.button(
-        "Close preview",
-        key="preview_dialog_close",
-        use_container_width=True,
-        type="primary",
-    ):
-        _dismiss_profile_preview()
-        st.rerun()
 
 
 def render_profile_preview_card(
@@ -444,9 +444,9 @@ def render_profile_preview_card(
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
 
-    # Leave room under the iframe for Streamlit's Close preview button.
-    shell_h = 520
-    photo_h = 200
+    # Conservative first-paint height; JS sizes from parent viewport (not dialog — avoids clip).
+    shell_h = 420
+    photo_h = 180
     uri0 = uris[idx] if n and uris[idx] else ""
     img_html = (
         f'<img id="photo" src="{uri0}" alt=""/>'
@@ -580,20 +580,16 @@ def render_profile_preview_card(
   function fitToViewport() {{
     var avail = 0;
     try {{
-      var parentH = window.parent.innerHeight || 0;
-      var dlg = window.parent.document.querySelector('[data-testid="stDialog"]');
-      if (dlg) {{
-        var r = dlg.getBoundingClientRect();
-        // Title row (~56) + Close preview button (~64) + padding
-        avail = Math.floor((r.height || parentH) - 130);
-      }} else {{
-        avail = Math.floor(parentH * 0.72);
-      }}
+      // Size from the phone viewport, not the dialog — dialog height already includes
+      // the tall iframe and would keep Close clipped on mobile.
+      var parentH = window.parent.innerHeight || window.parent.document.documentElement.clientHeight || 640;
+      // Title (~52) + Close button (~56) + dialog padding/margins (~48)
+      avail = Math.floor(parentH - 180);
     }} catch (e) {{
-      avail = Math.floor((window.innerHeight || 640) * 0.7);
+      avail = Math.floor((window.innerHeight || 640) * 0.62);
     }}
-    avail = Math.max(320, Math.min(avail, 560));
-    var photoH = avail < 420 ? 150 : (avail < 500 ? 180 : 200);
+    avail = Math.max(280, Math.min(avail, 520));
+    var photoH = avail < 360 ? 140 : (avail < 440 ? 160 : 180);
     var stage = document.getElementById("stage");
     var shell = document.getElementById("shell");
     if (stage) {{
@@ -865,7 +861,17 @@ div[data-testid="stDialog"] [data-testid="stBaseButton-headerNoPadding"] button 
     color: #F8E6D2 !important;
     opacity: 1 !important;
 }
-/* Close preview: always readable on dark dialog */
+/* Close preview: pinned near top of dialog, always readable on dark surface */
+div[data-testid="stDialog"] div[data-testid="stButton"]:has(button[kind="primary"]),
+div[data-testid="stDialog"] div[data-testid="element-container"]:has(button[kind="primary"]),
+div[data-testid="stDialog"] [data-testid="stElementContainer"]:has(button[kind="primary"]) {
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    background: #2C1A10 !important;
+    padding: 0.15rem 0 0.45rem !important;
+    margin-bottom: 0.15rem !important;
+}
 div[data-testid="stDialog"] button[kind="primary"],
 div[data-testid="stDialog"] button[data-testid="baseButton-primary"],
 div[data-testid="stDialog"] [data-testid="stBaseButton-primary"],
@@ -885,7 +891,7 @@ div[data-testid="stDialog"] [data-testid="stBaseButton-primary"] button span {
     color: #2C1A10 !important;
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] {
-    margin: 0 0 0.35rem !important;
+    margin: 0 !important;
     overflow: hidden !important;
 }
 div[data-testid="stDialog"] div[data-testid="stCustomComponentV1"] iframe {
