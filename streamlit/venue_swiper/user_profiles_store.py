@@ -348,7 +348,8 @@ def upsert_profile(
     activities = [a.strip() for a in activity_preferences if str(a).strip()]
     phone_n = (phone or "").strip() or None
 
-    existing = fetch_profile(email_n, include_photo=True)
+    # Never pull photo bytes on the write path — that stalls mobile.
+    existing = fetch_profile(email_n, include_photo=False)
 
     terms_at = accepted_terms_at
     if terms_at is None:
@@ -362,8 +363,8 @@ def upsert_profile(
         photo_b64 = profile_photo_b64 or None
         photo_mime = (profile_photo_mime or "").strip() or None if photo_b64 else None
     else:
-        photo_b64 = (existing or {}).get("PROFILE_PHOTO_B64")
-        photo_mime = (existing or {}).get("PROFILE_PHOTO_MIME")
+        photo_b64 = None
+        photo_mime = None
 
     complete = bool(mark_complete) and compute_profile_complete_flag(
         {
@@ -404,8 +405,14 @@ def upsert_profile(
             accepted_terms_at = excluded.accepted_terms_at,
             marketing_opt_in = excluded.marketing_opt_in,
             profile_complete = excluded.profile_complete,
-            profile_photo_b64 = excluded.profile_photo_b64,
-            profile_photo_mime = excluded.profile_photo_mime,
+            profile_photo_b64 = CASE
+                WHEN %s THEN excluded.profile_photo_b64
+                ELSE {table}.profile_photo_b64
+            END,
+            profile_photo_mime = CASE
+                WHEN %s THEN excluded.profile_photo_mime
+                ELSE {table}.profile_photo_mime
+            END,
             updated_at = NOW()
     """
     execute_write(
@@ -425,14 +432,27 @@ def upsert_profile(
             complete,
             photo_b64,
             photo_mime,
+            bool(update_photo),
+            bool(update_photo),
         ],
     )
     clear_profile_cache()
-    return fetch_profile(email_n, include_photo=True) or {
+    # Don't re-fetch with photo on the write path — that can hang mobile after save.
+    return {
         "USER_EMAIL": email_n,
         "FIRST_NAME": first,
         "LAST_NAME": last,
+        "DATE_OF_BIRTH": date_of_birth,
+        "PHONE": phone_n,
+        "CITY": city_n,
+        "NEIGHBOURHOOD": hood,
+        "DIETARY_NEEDS": dietary,
+        "ACTIVITY_PREFERENCES": activities,
+        "ACCEPTED_TERMS_AT": terms_at,
+        "MARKETING_OPT_IN": bool(marketing_opt_in),
         "PROFILE_COMPLETE": complete,
-        "PROFILE_PHOTO_B64": photo_b64,
-        "PROFILE_PHOTO_MIME": photo_mime,
+        "PROFILE_PHOTO_B64": photo_b64 if update_photo else None,
+        "PROFILE_PHOTO_MIME": photo_mime if update_photo else None,
+        "HAS_PROFILE_PHOTO": bool(update_photo and photo_b64)
+        or bool((existing or {}).get("HAS_PROFILE_PHOTO")),
     }

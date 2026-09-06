@@ -146,6 +146,9 @@ def clear_db_caches() -> None:
 
 
 def _get_postgres_conn():
+    import socket
+    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
     import psycopg2
     from psycopg2.extras import RealDictCursor
 
@@ -155,17 +158,30 @@ def _get_postgres_conn():
 
     conn = st.session_state.get("postgres_conn")
     if conn is None or getattr(conn, "closed", 1):
-        # Neon *pooler* rejects startup `options=` params like statement_timeout.
-        # Keep connect kwargs pooler-safe; otherwise every login looks like a new user.
-        conn = psycopg2.connect(
-            url,
-            cursor_factory=RealDictCursor,
-            connect_timeout=10,
-            keepalives=1,
-            keepalives_idle=30,
-            keepalives_interval=10,
-            keepalives_count=3,
-        )
+        # Prefer IPv4 — some networks hang on Neon pooler AAAA routes past connect_timeout.
+        connect_kwargs: dict[str, Any] = {
+            "cursor_factory": RealDictCursor,
+            "connect_timeout": 8,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        }
+        try:
+            parsed = urlparse(url)
+            host = parsed.hostname
+            port = parsed.port or 5432
+            if host:
+                infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+                if infos:
+                    ipv4 = infos[0][4][0]
+                    # libpq uses host for TLS SNI / verify; hostaddr forces the TCP target.
+                    connect_kwargs["hostaddr"] = ipv4
+        except Exception:
+            pass
+
+        # Neon pooler rejects startup `options=` (e.g. statement_timeout).
+        conn = psycopg2.connect(url, **connect_kwargs)
         st.session_state.postgres_conn = conn
     return conn
 

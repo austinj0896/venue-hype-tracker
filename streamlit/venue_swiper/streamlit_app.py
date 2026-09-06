@@ -2584,16 +2584,42 @@ def main() -> None:
 
     email = st.session_state["user_email"]
 
+    profile = None
+    load_error: Exception | None = None
     try:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
         with st.spinner("Loading your profile…"):
-            profile = fetch_profile(email, include_photo=False)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(fetch_profile, email, False)
+                try:
+                    profile = fut.result(timeout=15)
+                except FuturesTimeout as exc:
+                    clear_db_caches()
+                    load_error = TimeoutError(
+                        "Timed out talking to the database. Neon may be waking up — try again."
+                    )
+                    load_error.__cause__ = exc
     except Exception as exc:  # noqa: BLE001
-        log_event("fetch_profile", "Profile fetch failed", level="error", email=email, exc=exc)
-        st.error("Couldn’t load your profile. Pull to refresh, or try again in a moment.")
+        load_error = exc
+
+    if load_error is not None:
+        log_event("fetch_profile", "Profile fetch failed", level="error", email=email, exc=load_error)
+        st.error(str(load_error) if isinstance(load_error, TimeoutError) else "Couldn’t load your profile.")
         show_recent_errors()
-        if st.button("Sign out", type="secondary", key="profile_fail_sign_out"):
-            del st.session_state["user_email"]
-            st.rerun()
+        cols = st.columns(2)
+        with cols[0]:
+            if st.button("Try again", type="primary", use_container_width=True, key="profile_retry"):
+                clear_db_caches()
+                try:
+                    fetch_profile.clear()
+                except Exception:
+                    pass
+                st.rerun()
+        with cols[1]:
+            if st.button("Sign out", type="secondary", use_container_width=True, key="profile_fail_sign_out"):
+                del st.session_state["user_email"]
+                st.rerun()
         return
 
     try:

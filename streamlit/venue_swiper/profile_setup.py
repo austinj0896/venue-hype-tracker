@@ -507,11 +507,18 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
     st.rerun()
 
 
+PROFILE_FLASH_KEY = "apres_profile_flash"
+
+
 def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     """Edit surface for users who already completed basic setup."""
     st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
     st.caption("Update your taste profile anytime. Ratings and plans stay as they are.")
     st.markdown(f"<style>{profile_setup_css()}</style>", unsafe_allow_html=True)
+
+    flash = st.session_state.pop(PROFILE_FLASH_KEY, None)
+    if flash:
+        st.success(flash)
 
     st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
     st.markdown(
@@ -623,5 +630,8 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
             st.error("Profile is still incomplete. Check required fields.")
             return
         st.session_state.pop(DRAFT_KEY, None)
-        st.toast("Profile updated.")
+        clear_profile_cache()
+        st.session_state[PROFILE_FLASH_KEY] = (
+            f"Saved. City set to {saved.get('CITY') or choice}."
+        )
         st.rerun()
