@@ -19,6 +19,7 @@ from profile_options import (
     RELATIONSHIP_STATUS_PARTNERED,
     RELATIONSHIP_STATUS_SOLO,
     compute_profile_visibility,
+    label_for_choice,
     neighbourhoods_for_city,
     quest_by_id,
     relationship_preview_line,
@@ -344,6 +345,45 @@ def _chips_html(items: list[str]) -> str:
     return "".join(bits)
 
 
+def _extended_preview_html(extended: dict[str, Any] | None) -> str:
+    """Render filled atelier chapters as labeled chip rows for the preview card."""
+    blob = extended or {}
+    if not blob:
+        return ""
+    parts: list[str] = []
+    for quest in QUESTS:
+        chips: list[str] = []
+        for field in quest.get("fields") or []:
+            key = str(field.get("key") or "")
+            kind = str(field.get("kind") or "multi")
+            options = list(field.get("options") or [])
+            if kind == "single":
+                label = label_for_choice(options, str(blob.get(key) or "").strip() or None)
+                if label:
+                    chips.append(label)
+            else:
+                for item in blob.get(key) or []:
+                    text = str(item).strip()
+                    if text:
+                        chips.append(text)
+        if not chips:
+            continue
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for chip in chips:
+            if chip in seen:
+                continue
+            seen.add(chip)
+            uniq.append(chip)
+        title = escape(str(quest.get("title") or "Chapter"))
+        chips_html = _chips_html(uniq).replace("preview-chip", "ap-chip")
+        parts.append(
+            f'<div class="ap-label">{title}</div>'
+            f'<div class="ap-chips">{chips_html}</div>'
+        )
+    return "".join(parts)
+
+
 def _dismiss_profile_preview() -> None:
     st.session_state[PREVIEW_OPEN_KEY] = False
     st.session_state[PARTNER_PREVIEW_KEY] = False
@@ -451,6 +491,7 @@ def _open_profile_preview_dialog(
     date_of_birth: Any = None,
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
+    extended_profile: dict[str, Any] | None = None,
 ) -> None:
     """Centered phone-card overlay (not st.dialog — dialog CSS kept breaking layout)."""
     render_profile_preview_card(
@@ -463,6 +504,7 @@ def _open_profile_preview_dialog(
         date_of_birth=date_of_birth,
         relationship_status=relationship_status,
         open_to_dates=open_to_dates,
+        extended_profile=extended_profile,
     )
 
 
@@ -477,6 +519,7 @@ def render_profile_preview_card(
     date_of_birth: Any = None,
     relationship_status: str | None = None,
     open_to_dates: bool | None = None,
+    extended_profile: dict[str, Any] | None = None,
 ) -> None:
     """Inject a centered, phone-sized preview modal into the parent page."""
     import json
@@ -515,6 +558,7 @@ def render_profile_preview_card(
     act_html = (_chips_html(list(activities)) or (
         '<span class="ap-chip muted">Still figuring it out</span>'
     )).replace("preview-chip", "ap-chip")
+    deeper_html = _extended_preview_html(extended_profile)
 
     uris: list[str] = []
     for photo in photos:
@@ -525,6 +569,7 @@ def render_profile_preview_card(
     status_js = _js_str(status_html)
     act_js = _js_str(act_html)
     diet_js = _js_str(diet_html)
+    deeper_js = _js_str(deeper_html)
 
     components.html(
         f"""<!DOCTYPE html>
@@ -679,6 +724,7 @@ def render_profile_preview_card(
         <div class="ap-chips">{act_js}</div>
         <div class="ap-label">Dietary</div>
         <div class="ap-chips">{diet_js}</div>
+        {deeper_js}
       </div>
       <div class="ap-footer">
         <button type="button" class="ap-close" id="apClose">Close preview</button>
@@ -1980,6 +2026,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
             date_of_birth=dob_live,
             relationship_status=status_live or None,
             open_to_dates=open_live if isinstance(open_live, bool) else None,
+            extended_profile=get_extended_profile(email=email, profile=profile),
         )
 
     st.markdown('<div class="section-label">About you</div>', unsafe_allow_html=True)
@@ -2208,6 +2255,10 @@ def _render_partner_banner(email: str) -> None:
                 date_of_birth=other.get("DATE_OF_BIRTH"),
                 relationship_status=other.get("RELATIONSHIP_STATUS"),
                 open_to_dates=other.get("OPEN_TO_DATES"),
+                extended_profile=get_extended_profile(
+                    email=partner,
+                    profile=other,
+                ),
             )
         else:
             st.warning("You can’t view that profile.")
