@@ -1558,7 +1558,7 @@ def _render_connection_controls(
             else "Your profile stays private."
         )
     else:
-        st.caption("Coupled profiles stay private. Only a linked partner can see yours.")
+        st.caption("Profiles in it for keeps stay private. Only a linked partner can see yours.")
         if not hide_partner_invite:
             partner_email = st.text_input(
                 "Partner email (optional)",
@@ -1589,7 +1589,7 @@ def _open_setup_partner_request_dialog(
     other = fetch_profile(from_email, include_photo=False) or {}
     name = (other.get("FIRST_NAME") or "").strip() or from_email
     their_status = str(other.get("RELATIONSHIP_STATUS") or "").strip()
-    status_label = RELATIONSHIP_STATUS_LABELS.get(their_status, "Coupled up")
+    status_label = RELATIONSHIP_STATUS_LABELS.get(their_status, "In it for keeps")
     if their_status in RELATIONSHIP_STATUS_SOLO or their_status not in RELATIONSHIP_STATUS_KEYS:
         status_label = RELATIONSHIP_STATUS_LABELS["coupled_up"]
 
@@ -1614,7 +1614,7 @@ def _open_setup_partner_request_dialog(
                 st.session_state[SETUP_PARTNER_DIALOG_KEY] = False
                 st.session_state[PROFILE_FLASH_KEY] = (
                     f"Linked with {result.get('FROM_NAME') or from_email}. "
-                    f"Status set to {RELATIONSHIP_STATUS_LABELS.get(str(result.get('RELATIONSHIP_STATUS')), 'Coupled up')}."
+                    f"Status set to {RELATIONSHIP_STATUS_LABELS.get(str(result.get('RELATIONSHIP_STATUS')), 'In it for keeps')}."
                 )
                 st.rerun()
             except Exception as exc:  # noqa: BLE001

@@ -316,7 +316,7 @@ RELATIONSHIP_STATUS_LABELS: dict[str, str] = {
     "flying_solo": "Flying solo",
     "complicated": "It's complicated",
     "seeing_someone": "Seeing someone",
-    "coupled_up": "Coupled up",
+    "coupled_up": "In it for keeps",
 }
 OPEN_TO_DATES_LABELS: dict[bool, str] = {
     True: "Open to dates",
