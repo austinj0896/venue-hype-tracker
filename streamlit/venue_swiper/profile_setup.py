@@ -1938,7 +1938,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         return
 
     st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
-    st.caption("Photos first, then the details. Preview anytime.")
+    st.caption("How you show up for the night.")
 
     # Parked off-screen so overlay Close / backdrop can dismiss without a page reload.
     if _render_preview_dismiss_trigger():
@@ -1950,7 +1950,6 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
 
     _render_partner_banner(email)
 
-    st.markdown('<div class="section-label">Photos</div>', unsafe_allow_html=True)
     _render_photo_picker(email, draft, key_prefix="edit")
 
     preview_open = bool(st.session_state.get(PREVIEW_OPEN_KEY))
