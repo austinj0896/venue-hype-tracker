@@ -350,16 +350,48 @@ def _dismiss_profile_preview() -> None:
 
 
 def _render_preview_dismiss_trigger() -> bool:
-    """Off-screen Streamlit button the overlay JS clicks (avoids full page reload)."""
-    left, _right = st.columns([0.0001, 1])
-    with left:
-        return bool(
-            st.button(
-                PREVIEW_DISMISS_LABEL,
-                key="apres_preview_dismiss",
-                type="secondary",
-            )
+    """Streamlit dismiss control, parked off-screen (no layout chrome / white box)."""
+    import streamlit.components.v1 as components
+
+    clicked = bool(
+        st.button(
+            PREVIEW_DISMISS_LABEL,
+            key="apres_preview_dismiss",
+            type="secondary",
         )
+    )
+    components.html(
+        f"""<!DOCTYPE html><html><body style="margin:0">
+<script>
+(function(){{
+  try {{
+    var doc = window.parent.document;
+    var label = "{PREVIEW_DISMISS_LABEL}";
+    var nodes = doc.querySelectorAll("button");
+    for (var i = 0; i < nodes.length; i++) {{
+      var text = (nodes[i].textContent || nodes[i].innerText || "").trim();
+      if (text !== label) continue;
+      if (nodes[i].closest("#apres-preview-root")) continue;
+      var wrap = nodes[i].closest('[data-testid="stButton"]')
+        || nodes[i].closest('[data-testid="element-container"]')
+        || nodes[i].parentElement;
+      if (!wrap) continue;
+      wrap.setAttribute("data-apres-dismiss", "1");
+      wrap.style.cssText = "position:fixed!important;left:-9999px!important;top:0!important;"
+        + "width:1px!important;height:1px!important;opacity:0!important;overflow:hidden!important;"
+        + "margin:0!important;padding:0!important;border:0!important;min-height:0!important;";
+    }}
+    var frame = window.frameElement;
+    if (frame) {{
+      frame.style.cssText = "position:absolute;width:0;height:0;opacity:0;border:0;pointer-events:none;";
+    }}
+  }} catch (e) {{}}
+}})();
+</script></body></html>""",
+        height=0,
+        scrolling=False,
+    )
+    return clicked
 
 
 def _cleanup_preview_overlay_component() -> None:
@@ -1860,9 +1892,9 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         return
 
     st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
-    st.caption("Photos save as you go. Use preview to see what others would see.")
+    st.caption("Photos first, then the details. Preview anytime.")
 
-    # Always present so overlay Close / backdrop can click it without a page reload.
+    # Parked off-screen so overlay Close / backdrop can dismiss without a page reload.
     if _render_preview_dismiss_trigger():
         _dismiss_profile_preview()
         st.rerun()
@@ -1871,6 +1903,9 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     _hydrate_draft_photos(email, draft, profile)
 
     _render_partner_banner(email)
+
+    st.markdown('<div class="section-label">Photos</div>', unsafe_allow_html=True)
+    _render_photo_picker(email, draft, key_prefix="edit")
 
     preview_open = bool(st.session_state.get(PREVIEW_OPEN_KEY))
     if st.button(
@@ -1947,13 +1982,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
             open_to_dates=open_live if isinstance(open_live, bool) else None,
         )
 
-    _render_partner_inbox(email)
-    _render_connection_settings(email, draft, profile)
-
-    _render_quest_hub(email, profile)
-
-    _render_photo_picker(email, draft, key_prefix="edit")
-
+    st.markdown('<div class="section-label">About you</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         first = st.text_input("First name", value=draft["first_name"], key="edit_first")
@@ -2008,6 +2037,12 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
         default=[a for a in draft.get("activity_preferences") or [] if a in ACTIVITY_OPTIONS],
         key="edit_activities",
     )
+
+    _render_partner_inbox(email)
+    _render_connection_settings(email, draft, profile)
+
+    _render_quest_hub(email, profile)
+
     marketing = st.checkbox(
         "Marketing emails",
         value=bool(draft.get("marketing_opt_in")),

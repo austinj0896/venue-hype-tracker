@@ -134,8 +134,8 @@ APRES_CSS = f"""
     --steel: #7897A3;
     --sage: #B6BEB1;
     --text-dark: #2C1A10;
-    --text-mid: #7A5B48;
-    --text-light: #B09080;
+    --text-mid: #6B4A3A;
+    --text-light: #8F6F5E;
     --hairline: rgba(112, 77, 59, 0.12);
     --hairline-strong: rgba(112, 77, 59, 0.18);
     --shadow-sm: 0 1px 2px rgba(44, 26, 16, 0.04), 0 4px 12px rgba(44, 26, 16, 0.05);
@@ -314,8 +314,12 @@ div[data-testid="stImage"] img {{
     font-weight: 500;
     letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: var(--text-light);
+    color: var(--text-mid);
     margin: var(--space-5) 0 var(--space-3);
+}}
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {{
+    color: var(--text-mid) !important;
 }}
 .date-card {{
     background:
@@ -628,7 +632,7 @@ div[data-testid="stImage"] img {{
 }}
 .swipe-hint {{
     text-align: center;
-    color: var(--text-light);
+    color: var(--text-mid);
     font-size: 12px;
     letter-spacing: 0.05em;
     line-height: 1.5;
@@ -937,13 +941,26 @@ div[data-testid="stTabs"] button {{
     font-size: 14px !important;
     font-weight: 500 !important;
     letter-spacing: 0.03em !important;
-    color: var(--text-light) !important;
+    color: var(--text-mid) !important;
     min-height: 44px !important;
     padding: 0.65rem 0.7rem !important;
     transition: color var(--dur) var(--ease-inout) !important;
 }}
 div[data-testid="stTabs"] button[aria-selected="true"] {{
     color: var(--brown) !important;
+}}
+[data-apres-dismiss="1"] {{
+    position: fixed !important;
+    left: -9999px !important;
+    top: 0 !important;
+    width: 1px !important;
+    height: 1px !important;
+    opacity: 0 !important;
+    overflow: hidden !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    min-height: 0 !important;
 }}
 div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
     background-color: var(--gold) !important;
@@ -958,7 +975,7 @@ div[data-testid="stMultiSelect"] label {{
     font-weight: 500 !important;
     letter-spacing: 0.1em !important;
     text-transform: uppercase !important;
-    color: var(--text-light) !important;
+    color: var(--text-mid) !important;
 }}
 div[data-testid="stTextInput"] input,
 div[data-testid="stSelectbox"] > div > div,
@@ -1023,9 +1040,17 @@ div[data-testid="stBaseButton-secondary"] button:active {{
 div[data-testid="stBaseButton-primary"] button,
 div[data-testid="stFormSubmitButton"] button {{
     background: linear-gradient(180deg, #E0B85C 0%, var(--gold) 55%, #C4923A 100%) !important;
-    color: var(--brown) !important;
+    color: var(--text-dark) !important;
     border: 1px solid rgba(112, 77, 59, 0.08) !important;
     box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+}}
+div[data-testid="stBaseButton-primary"] button p,
+div[data-testid="stBaseButton-primary"] button span,
+div[data-testid="stBaseButton-primary"] button div,
+div[data-testid="stFormSubmitButton"] button p,
+div[data-testid="stFormSubmitButton"] button span,
+div[data-testid="stFormSubmitButton"] button div {{
+    color: var(--text-dark) !important;
 }}
 div[data-testid="stBaseButton-primary"] button:hover,
 div[data-testid="stFormSubmitButton"] button:hover {{
