@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import base64
-import uuid
 import io
+import json
+import uuid
 from datetime import date, datetime
 from typing import Any
 
@@ -20,10 +21,13 @@ from db import (
     user_profiles_table,
 )
 from profile_options import (
+    QUEST_KEYS,
+    QUESTS,
     RELATIONSHIP_STATUS_KEYS,
     RELATIONSHIP_STATUS_PARTNERED,
     RELATIONSHIP_STATUS_SOLO,
     compute_profile_visibility,
+    quest_by_id,
 )
 
 _SCHEMA_APPLIED_KEY = "_user_profiles_schema_ok"
@@ -61,6 +65,7 @@ def ensure_schema() -> None:
                 profile_complete      BOOLEAN NOT NULL DEFAULT FALSE,
                 profile_photo_b64     TEXT,
                 profile_photo_mime    TEXT,
+                extended_profile      JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                 created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
@@ -75,6 +80,10 @@ def ensure_schema() -> None:
             (
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS profile_visibility "
                 f"TEXT NOT NULL DEFAULT 'private'"
+            ),
+            (
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS extended_profile "
+                f"JSONB NOT NULL DEFAULT '{{}}'::jsonb"
             ),
         ):
             try:
@@ -256,6 +265,159 @@ def _as_list(value: Any) -> list[str]:
     return [text]
 
 
+_EXTENDED_LIST_KEYS = frozenset(
+    {
+        "cuisines",
+        "food_vibes",
+        "music_vibes",
+        "usually_free",
+        "deal_breakers",
+    }
+)
+_EXTENDED_SCALAR_KEYS = frozenset(
+    {
+        "drinking_vibe",
+        "budget_level",
+        "night_pace",
+        "adventure_level",
+    }
+)
+_EXTENDED_ALLOWED_KEYS = _EXTENDED_LIST_KEYS | _EXTENDED_SCALAR_KEYS
+
+
+def normalize_extended_profile(raw: Any) -> dict[str, Any]:
+    """Normalize extended_profile JSONB into a plain dict of known keys."""
+    data: Any = raw
+    if data is None:
+        return {}
+    if isinstance(data, str):
+        text = data.strip()
+        if not text:
+            return {}
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        k = str(key).strip()
+        if k not in _EXTENDED_ALLOWED_KEYS:
+            continue
+        if k in _EXTENDED_LIST_KEYS:
+            out[k] = _as_list(value)
+        else:
+            text = "" if value is None else str(value).strip()
+            if text:
+                out[k] = text
+    return out
+
+
+def quest_has_answers(extended: dict[str, Any] | None, quest_id: str) -> bool:
+    blob = extended or {}
+    for key in QUEST_KEYS.get((quest_id or "").strip(), ()):
+        value = blob.get(key)
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
+def quest_completion(extended: dict[str, Any] | None) -> tuple[int, int, int]:
+    """Return (done, total, percent) for mini-quest chapters."""
+    total = len(QUESTS)
+    if total <= 0:
+        return 0, 0, 0
+    done = sum(1 for quest in QUESTS if quest_has_answers(extended, str(quest["id"])))
+    pct = int(round((done / total) * 100))
+    return done, total, pct
+
+
+def get_extended_profile(
+    email: str | None = None,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read extended_profile from a profile row or Neon."""
+    if profile is not None and "EXTENDED_PROFILE" in profile:
+        return normalize_extended_profile(profile.get("EXTENDED_PROFILE"))
+    if not email or backend() != "postgres":
+        return {}
+    ensure_schema()
+    table = user_profiles_table()
+    email_n = email.strip().lower()
+    try:
+        rows = run_query(
+            f"""
+            select extended_profile
+            from {table}
+            where lower(user_email) = lower(%s)
+            limit 1
+            """,
+            [email_n],
+        )
+    except Exception:
+        return {}
+    if not rows:
+        return {}
+    return normalize_extended_profile(rows[0].get("EXTENDED_PROFILE"))
+
+
+def save_quest_answers(
+    email: str,
+    quest_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge one quest's answers into extended_profile and persist."""
+    if backend() != "postgres":
+        raise RuntimeError("User profiles are only supported on Neon Postgres.")
+    ensure_schema()
+    quest = quest_by_id(quest_id)
+    if not quest:
+        raise ValueError(f"Unknown quest id: {quest_id}")
+
+    allowed = set(QUEST_KEYS.get(str(quest["id"]), ()))
+    field_meta = {str(f["key"]): f for f in quest.get("fields") or []}
+    cleaned: dict[str, Any] = {}
+    for key in allowed:
+        if key not in payload:
+            continue
+        meta = field_meta.get(key) or {}
+        kind = str(meta.get("kind") or "")
+        raw = payload.get(key)
+        if kind == "multi" or key in _EXTENDED_LIST_KEYS:
+            values = _as_list(raw)
+            max_n = meta.get("max")
+            if isinstance(max_n, int) and max_n > 0:
+                values = values[:max_n]
+            cleaned[key] = values
+        else:
+            text = "" if raw is None else str(raw).strip()
+            cleaned[key] = text
+
+    current = get_extended_profile(email)
+    for key, value in cleaned.items():
+        if (isinstance(value, list) and not value) or (isinstance(value, str) and not value):
+            current.pop(key, None)
+        else:
+            current[key] = value
+
+    email_n = email.strip().lower()
+    table = user_profiles_table()
+    execute_write(
+        f"""
+        update {table}
+        set extended_profile = %s::jsonb,
+            updated_at = NOW()
+        where lower(user_email) = lower(%s)
+        """,
+        [json.dumps(current), email_n],
+    )
+    clear_profile_cache()
+    return current
+
+
 def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
@@ -292,6 +454,7 @@ def normalize_profile_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "RELATIONSHIP_STATUS": status,
         "OPEN_TO_DATES": open_to_dates,
         "PROFILE_VISIBILITY": visibility,
+        "EXTENDED_PROFILE": normalize_extended_profile(row.get("EXTENDED_PROFILE")),
         "CREATED_AT": row.get("CREATED_AT"),
         "UPDATED_AT": row.get("UPDATED_AT"),
     }
@@ -668,13 +831,17 @@ def save_profile_photos(email: str, photos: list[dict[str, Any]]) -> int:
 
 @st.cache_data(show_spinner=False, ttl=30)
 def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | None:
-    """Load profile. Does not run DDL on the hot path.
+    """Load profile. Schema ensure is session-cached and best-effort.
 
     Uses only ``user_profiles`` for the primary read so a missing gallery
     table can never block login. Photo counts are enriched best-effort.
     """
     if not email or backend() != "postgres":
         return None
+    try:
+        ensure_schema()
+    except Exception:
+        pass
     table = user_profiles_table()
     email_n = email.strip().lower()
     photo_cols = (
@@ -699,6 +866,7 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
             relationship_status,
             open_to_dates,
             profile_visibility,
+            extended_profile,
             {photo_cols}
             (profile_photo_b64 is not null and length(profile_photo_b64) > 0)
                 as has_profile_photo,
@@ -711,7 +879,7 @@ def fetch_profile(email: str, include_photo: bool = False) -> dict[str, Any] | N
     try:
         rows = run_query(sql, [email_n])
     except Exception:
-        # Older DBs before relationship columns — fall back without them.
+        # Older DBs before relationship / extended columns — fall back without them.
         sql_legacy = f"""
             select
                 user_email,

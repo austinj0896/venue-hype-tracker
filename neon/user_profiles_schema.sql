@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     profile_visibility    TEXT NOT NULL DEFAULT 'private',
     profile_photo_b64     TEXT,
     profile_photo_mime    TEXT,
+    extended_profile      JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

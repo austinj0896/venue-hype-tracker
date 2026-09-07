@@ -5,6 +5,8 @@ Kept separate from scripts/vibe_taxonomy.py (catalog tags for venues).
 
 from __future__ import annotations
 
+from typing import Any
+
 # Cities we support for profile + neighbourhood selection (forced pick).
 DEFAULT_CITIES = [
     "Manhattan Beach",
@@ -320,6 +322,270 @@ OPEN_TO_DATES_LABELS: dict[bool, str] = {
     True: "Open to dates",
     False: "Not right now",
 }
+
+
+# --- Extended profile mini-quests (post-signup, optional) -----------------
+
+CUISINE_OPTIONS = [
+    "Italian",
+    "Sushi / Japanese",
+    "Mexican",
+    "French",
+    "Mediterranean",
+    "Steak / American",
+    "Thai",
+    "Indian",
+    "Seafood",
+    "Korean",
+    "Chinese",
+    "Something unexpected",
+]
+
+FOOD_VIBE_OPTIONS = [
+    "Intimate",
+    "Shared plates",
+    "Tasting menu",
+    "Casual & easy",
+    "Celebration",
+    "Late-night bites",
+]
+
+DRINKING_VIBE_OPTIONS: list[tuple[str, str]] = [
+    ("dry", "Mostly dry"),
+    ("wine_forward", "Wine-forward"),
+    ("cocktails_forward", "Cocktails-forward"),
+    ("beer_casual", "Beer & casual"),
+    ("anything_goes", "Anything goes"),
+]
+
+BUDGET_LEVEL_OPTIONS: list[tuple[str, str]] = [
+    ("easy", "Easygoing"),
+    ("nice", "A nice night"),
+    ("treat", "Treat yourself"),
+    ("splurge", "Special occasion"),
+]
+
+NIGHT_PACE_OPTIONS: list[tuple[str, str]] = [
+    ("early_soft", "Early soft landing"),
+    ("golden_hour_into_dinner", "Golden hour into dinner"),
+    ("dinner_then_drinks", "Dinner then drinks"),
+    ("late_last_call", "Late last call"),
+]
+
+MUSIC_VIBE_OPTIONS = [
+    "Jazz",
+    "Soft electronic",
+    "Indie / acoustic",
+    "Latin",
+    "Classic lounge",
+    "Upbeat dance",
+    "Quiet enough to talk",
+    "Whatever the room wants",
+]
+
+USUALLY_FREE_OPTIONS = [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun",
+    "Weeknights",
+    "Weekends",
+]
+
+ADVENTURE_LEVEL_OPTIONS: list[tuple[str, str]] = [
+    ("favorites", "Stick to favorites"),
+    ("mix", "A healthy mix"),
+    ("firsts", "Always chasing firsts"),
+]
+
+DEAL_BREAKER_OPTIONS = [
+    "Loud sports bars",
+    "Crowded clubs",
+    "Long waits",
+    "Very formal dress codes",
+    "Smoke-heavy rooms",
+    "Far from transit / parking",
+    "Too quiet / dead rooms",
+    "Overly touristy spots",
+]
+
+
+def _quest_field(
+    *,
+    key: str,
+    label: str,
+    kind: str,
+    options: list[Any],
+    max_choices: int | None = None,
+) -> dict[str, Any]:
+    field: dict[str, Any] = {
+        "key": key,
+        "label": label,
+        "kind": kind,
+        "options": options,
+    }
+    if max_choices is not None:
+        field["max"] = max_choices
+    return field
+
+
+# Driven UI metadata for the Go deeper hub + quest screens.
+QUESTS: list[dict[str, Any]] = [
+    {
+        "id": "taste",
+        "title": "Tonight’s taste",
+        "eyebrow": "Chapter 01",
+        "blurb": "What do you lean toward when the night starts with food?",
+        "fields": [
+            _quest_field(
+                key="cuisines",
+                label="Cuisines you reach for",
+                kind="multi",
+                options=CUISINE_OPTIONS,
+                max_choices=5,
+            ),
+            _quest_field(
+                key="food_vibes",
+                label="The mood at the table",
+                kind="multi",
+                options=FOOD_VIBE_OPTIONS,
+                max_choices=3,
+            ),
+        ],
+    },
+    {
+        "id": "drink",
+        "title": "How you drink",
+        "eyebrow": "Chapter 02",
+        "blurb": "From dry to deep pour — what’s your default?",
+        "fields": [
+            _quest_field(
+                key="drinking_vibe",
+                label="Your drinking vibe",
+                kind="single",
+                options=DRINKING_VIBE_OPTIONS,
+            ),
+        ],
+    },
+    {
+        "id": "budget",
+        "title": "The bill",
+        "eyebrow": "Chapter 03",
+        "blurb": "Comfort zone for a night out — no judgment.",
+        "fields": [
+            _quest_field(
+                key="budget_level",
+                label="Spend comfort",
+                kind="single",
+                options=BUDGET_LEVEL_OPTIONS,
+            ),
+        ],
+    },
+    {
+        "id": "pace",
+        "title": "Pace of night",
+        "eyebrow": "Chapter 04",
+        "blurb": "Soft landing, or still going when the lights come up?",
+        "fields": [
+            _quest_field(
+                key="night_pace",
+                label="How the evening usually unfolds",
+                kind="single",
+                options=NIGHT_PACE_OPTIONS,
+            ),
+        ],
+    },
+    {
+        "id": "soundtrack",
+        "title": "Soundtrack",
+        "eyebrow": "Chapter 05",
+        "blurb": "What should the room sound like?",
+        "fields": [
+            _quest_field(
+                key="music_vibes",
+                label="Sounds that fit",
+                kind="multi",
+                options=MUSIC_VIBE_OPTIONS,
+                max_choices=4,
+            ),
+        ],
+    },
+    {
+        "id": "free",
+        "title": "Usually free",
+        "eyebrow": "Chapter 06",
+        "blurb": "When plans actually happen.",
+        "fields": [
+            _quest_field(
+                key="usually_free",
+                label="You’re most free",
+                kind="multi",
+                options=USUALLY_FREE_OPTIONS,
+                max_choices=5,
+            ),
+        ],
+    },
+    {
+        "id": "adventure",
+        "title": "Adventure level",
+        "eyebrow": "Chapter 07",
+        "blurb": "Familiar favorites, or always chasing firsts?",
+        "fields": [
+            _quest_field(
+                key="adventure_level",
+                label="Your appetite for new",
+                kind="single",
+                options=ADVENTURE_LEVEL_OPTIONS,
+            ),
+        ],
+    },
+    {
+        "id": "hard_nos",
+        "title": "Hard nos",
+        "eyebrow": "Chapter 08",
+        "blurb": "Soft passes and true deal-breakers.",
+        "fields": [
+            _quest_field(
+                key="deal_breakers",
+                label="Rather skip",
+                kind="multi",
+                options=DEAL_BREAKER_OPTIONS,
+                max_choices=5,
+            ),
+        ],
+    },
+]
+
+QUEST_IDS: tuple[str, ...] = tuple(str(q["id"]) for q in QUESTS)
+
+# Keys that belong to each quest — used for completion checks / partial saves.
+QUEST_KEYS: dict[str, tuple[str, ...]] = {
+    str(q["id"]): tuple(str(f["key"]) for f in q["fields"]) for q in QUESTS
+}
+
+
+def quest_by_id(quest_id: str) -> dict[str, Any] | None:
+    key = (quest_id or "").strip()
+    for quest in QUESTS:
+        if quest["id"] == key:
+            return quest
+    return None
+
+
+def label_for_choice(options: list[Any], value: str | None) -> str:
+    """Resolve a stored single-select key to its display label."""
+    if not value:
+        return ""
+    for opt in options:
+        if isinstance(opt, tuple) and len(opt) >= 2:
+            if opt[0] == value:
+                return str(opt[1])
+        elif str(opt) == value:
+            return str(opt)
+    return str(value)
 
 
 def relationship_status_label(status: str | None) -> str:

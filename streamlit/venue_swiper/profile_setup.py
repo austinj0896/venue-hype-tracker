@@ -13,12 +13,14 @@ from profile_options import (
     DEFAULT_CITIES,
     DIETARY_OPTIONS,
     OPEN_TO_DATES_LABELS,
+    QUESTS,
     RELATIONSHIP_STATUS_KEYS,
     RELATIONSHIP_STATUS_LABELS,
     RELATIONSHIP_STATUS_PARTNERED,
     RELATIONSHIP_STATUS_SOLO,
     compute_profile_visibility,
     neighbourhoods_for_city,
+    quest_by_id,
     relationship_preview_line,
 )
 from partner_store import (
@@ -37,11 +39,15 @@ from user_profiles_store import (
     MAX_PROFILE_PHOTOS,
     clear_profile_cache,
     fetch_profile,
+    get_extended_profile,
     is_profile_complete,
     list_profile_photos,
     photo_data_uri,
     prepare_profile_photo,
+    quest_completion,
+    quest_has_answers,
     save_profile_photos,
+    save_quest_answers,
     upsert_profile,
 )
 
@@ -53,6 +59,7 @@ PARTNER_PREVIEW_KEY = "apres_partner_preview_open"
 PREVIEW_CLOSE_QP = "apres_close"
 SETUP_PARTNER_DIALOG_KEY = "apres_setup_partner_dialog"
 PROFILE_FLASH_KEY = "apres_profile_flash"
+QUEST_ID_KEY = "apres_quest_id"
 
 
 def _empty_draft(email: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1060,6 +1067,135 @@ div[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] p {
         border-radius: 8px;
     }
 }
+.quest-hub {
+    margin: 0.15rem 0 1.15rem;
+    padding: 1.15rem 1.1rem 1rem;
+    border-radius: 18px;
+    background:
+        linear-gradient(165deg, rgba(211,163,69,0.14) 0%, transparent 42%),
+        linear-gradient(180deg, rgba(248,230,210,0.55) 0%, rgba(240,215,188,0.35) 100%);
+    border: 1px solid rgba(112,77,59,0.12);
+    box-shadow: 0 10px 28px rgba(44,26,16,0.05);
+    animation: apres-card-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.quest-hub-eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #D3A345;
+    margin: 0 0 0.35rem;
+}
+.quest-hub-title {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 28px;
+    font-weight: 500;
+    font-style: italic;
+    color: #704D3B;
+    line-height: 1.15;
+    margin: 0 0 0.45rem;
+}
+.quest-hub-sub {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #7A5B48;
+    margin: 0 0 0.85rem;
+}
+.quest-meter-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 0 0 0.45rem;
+}
+.quest-meter-label {
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: #7A5B48;
+}
+.quest-meter-pct {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: #704D3B;
+}
+.quest-meter-track {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(112,77,59,0.12);
+    overflow: hidden;
+    margin: 0 0 0.95rem;
+}
+.quest-meter-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #D3A345 0%, #C4923A 100%);
+    transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.quest-card {
+    padding: 0.85rem 0.15rem 0.35rem;
+    border-top: 1px solid rgba(112,77,59,0.1);
+}
+.quest-card:first-of-type {
+    border-top: none;
+    padding-top: 0.15rem;
+}
+.quest-card-eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(211,163,69,0.95);
+    margin: 0 0 0.2rem;
+}
+.quest-card-title {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 22px;
+    font-weight: 500;
+    font-style: italic;
+    color: #704D3B;
+    line-height: 1.15;
+    margin: 0 0 0.2rem;
+}
+.quest-card-blurb {
+    font-size: 13px;
+    line-height: 1.45;
+    color: #7A5B48;
+    margin: 0 0 0.55rem;
+}
+.quest-screen {
+    margin: 0.1rem 0 1rem;
+    padding: 1.25rem 1.15rem 1.1rem;
+    border-radius: 20px;
+    background:
+        linear-gradient(165deg, rgba(211,163,69,0.16) 0%, transparent 40%),
+        linear-gradient(180deg, #7A5643 0%, #704D3B 55%, #5E3F31 100%);
+    border: 1px solid rgba(248,230,210,0.08);
+    box-shadow: 0 4px 8px rgba(44,26,16,0.05), 0 24px 48px rgba(44,26,16,0.12),
+        inset 0 1px 0 rgba(248,230,210,0.1);
+    animation: apres-card-in 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    color: #F8E6D2;
+}
+.quest-screen-eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(211,163,69,0.95);
+    margin: 0 0 0.35rem;
+}
+.quest-screen-title {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 30px;
+    font-weight: 500;
+    font-style: italic;
+    color: #F8E6D2;
+    line-height: 1.12;
+    margin: 0 0 0.4rem;
+}
+.quest-screen-sub {
+    font-size: 13px;
+    line-height: 1.55;
+    color: rgba(248,230,210,0.62);
+    margin: 0;
+}
 """
 
 
@@ -1527,16 +1663,185 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
     st.rerun()
 
 
+def _leave_quest() -> None:
+    quest_id = str(st.session_state.pop(QUEST_ID_KEY, None) or "").strip()
+    if not quest_id:
+        return
+    quest = quest_by_id(quest_id)
+    if not quest:
+        return
+    for field in quest.get("fields") or []:
+        key = str(field.get("key") or "")
+        st.session_state.pop(f"quest_{quest_id}_{key}", None)
+
+
+def _option_labels(options: list[Any]) -> list[str]:
+    labels: list[str] = []
+    for opt in options:
+        if isinstance(opt, tuple) and len(opt) >= 2:
+            labels.append(str(opt[1]))
+        else:
+            labels.append(str(opt))
+    return labels
+
+
+def _option_values(options: list[Any]) -> list[str]:
+    values: list[str] = []
+    for opt in options:
+        if isinstance(opt, tuple) and len(opt) >= 2:
+            values.append(str(opt[0]))
+        else:
+            values.append(str(opt))
+    return values
+
+
+def _render_quest_hub(email: str, profile: dict[str, Any]) -> None:
+    extended = get_extended_profile(email=email, profile=profile)
+    done, total, pct = quest_completion(extended)
+    fill = max(0, min(100, pct))
+    st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="quest-hub">'
+        f'<div class="quest-hub-eyebrow">Atelier chapters</div>'
+        f'<div class="quest-hub-title">Go deeper</div>'
+        f'<div class="quest-hub-sub">'
+        f"Optional polish for sharper nights — take them in any order, about a minute each."
+        f"</div>"
+        f'<div class="quest-meter-row">'
+        f'<div class="quest-meter-label">{done} of {total} chapters</div>'
+        f'<div class="quest-meter-pct">{pct}%</div>'
+        f"</div>"
+        f'<div class="quest-meter-track">'
+        f'<div class="quest-meter-fill" style="width:{fill}%;"></div>'
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    for quest in QUESTS:
+        qid = str(quest["id"])
+        complete = quest_has_answers(extended, qid)
+        status = "Done" if complete else "Start"
+        st.markdown(
+            f'<div class="quest-card">'
+            f'<div class="quest-card-eyebrow">{escape(str(quest.get("eyebrow") or ""))}</div>'
+            f'<div class="quest-card-title">{escape(str(quest.get("title") or ""))}</div>'
+            f'<div class="quest-card-blurb">{escape(str(quest.get("blurb") or ""))}</div>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            status,
+            key=f"quest_open_{qid}",
+            use_container_width=True,
+            type="primary" if not complete else "secondary",
+        ):
+            st.session_state[QUEST_ID_KEY] = qid
+            st.rerun()
+
+
+def _render_quest_screen(email: str, quest_id: str, profile: dict[str, Any]) -> None:
+    quest = quest_by_id(quest_id)
+    if not quest:
+        _leave_quest()
+        st.rerun()
+        return
+
+    extended = get_extended_profile(email=email, profile=profile)
+    st.markdown(
+        f'<div class="quest-screen">'
+        f'<div class="quest-screen-eyebrow">{escape(str(quest.get("eyebrow") or ""))}</div>'
+        f'<div class="quest-screen-title">{escape(str(quest.get("title") or ""))}</div>'
+        f'<div class="quest-screen-sub">{escape(str(quest.get("blurb") or ""))}</div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    answers: dict[str, Any] = {}
+    for field in quest.get("fields") or []:
+        key = str(field.get("key") or "")
+        label = str(field.get("label") or key)
+        kind = str(field.get("kind") or "multi")
+        options = list(field.get("options") or [])
+        widget_key = f"quest_{quest_id}_{key}"
+
+        if kind == "single":
+            values = _option_values(options)
+            labels = _option_labels(options)
+            current = str(extended.get(key) or "").strip()
+            blank = "—"
+            display = [blank] + labels
+            if widget_key not in st.session_state:
+                if current and current in values:
+                    st.session_state[widget_key] = labels[values.index(current)]
+                else:
+                    st.session_state[widget_key] = blank
+            pick = st.selectbox(label, options=display, key=widget_key)
+            if pick == blank:
+                answers[key] = ""
+            else:
+                answers[key] = values[labels.index(pick)]
+        else:
+            max_n = field.get("max")
+            current_list = [str(v) for v in (extended.get(key) or []) if str(v)]
+            option_set = {str(o) for o in options}
+            defaults = [v for v in current_list if v in option_set]
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = defaults
+            kwargs: dict[str, Any] = {"key": widget_key}
+            if isinstance(max_n, int) and max_n > 0:
+                kwargs["max_selections"] = max_n
+                help_txt = f"Pick up to {max_n}."
+            else:
+                help_txt = None
+            answers[key] = st.multiselect(
+                label,
+                options=list(options),
+                help=help_txt,
+                **kwargs,
+            )
+
+    save_col, back_col = st.columns(2)
+    with save_col:
+        if st.button("Save", type="primary", use_container_width=True, key=f"quest_save_{quest_id}"):
+            try:
+                save_quest_answers(email, quest_id, answers)
+                if isinstance(profile, dict):
+                    profile["EXTENDED_PROFILE"] = get_extended_profile(email=email)
+                st.session_state[PROFILE_FLASH_KEY] = (
+                    f"Saved · {quest.get('title') or 'chapter'}"
+                )
+                _leave_quest()
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Couldn’t save this chapter. {exc}")
+    with back_col:
+        if st.button(
+            "Back to chapters",
+            use_container_width=True,
+            key=f"quest_back_{quest_id}",
+        ):
+            _leave_quest()
+            st.rerun()
+
+
 def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     """Edit surface for users who already completed basic setup."""
     st.markdown(f"<style>{profile_setup_css()}</style>", unsafe_allow_html=True)
     _consume_preview_close_query()
-    st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
-    st.caption("Photos save as you go. Use preview to see what others would see.")
 
     flash = st.session_state.pop(PROFILE_FLASH_KEY, None)
     if flash:
         st.success(flash)
+
+    active_quest = str(st.session_state.get(QUEST_ID_KEY) or "").strip()
+    if active_quest:
+        st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
+        _render_quest_screen(email, active_quest, profile)
+        return
+
+    st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
+    st.caption("Photos save as you go. Use preview to see what others would see.")
 
     draft = _get_draft(email, profile)
     _hydrate_draft_photos(email, draft, profile)
@@ -1621,17 +1926,7 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
     _render_partner_inbox(email)
     _render_connection_settings(email, draft, profile)
 
-    st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="empty-state" style="margin-top:0;">'
-        '<div class="empty-state-eyebrow">Extended profile</div>'
-        '<div class="empty-state-title">Food & drink · Activities</div>'
-        '<div class="empty-state-mark"></div>'
-        "<p>Core setup is done. Deeper buckets (cuisines, adventure level, deal-breakers) "
-        "will live here so recommendations can get sharper over time.</p>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    _render_quest_hub(email, profile)
 
     _render_photo_picker(email, draft, key_prefix="edit")
 
