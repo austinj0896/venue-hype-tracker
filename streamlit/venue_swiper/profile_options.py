@@ -460,7 +460,7 @@ QUESTS: list[dict[str, Any]] = [
         "id": "drink",
         "title": "How you drink",
         "eyebrow": "Chapter 02",
-        "blurb": "From dry to deep pour — what’s your default?",
+        "blurb": "From dry to deep pour. What’s your default?",
         "fields": [
             _quest_field(
                 key="drinking_vibe",
@@ -474,7 +474,7 @@ QUESTS: list[dict[str, Any]] = [
         "id": "budget",
         "title": "The bill",
         "eyebrow": "Chapter 03",
-        "blurb": "Comfort zone for a night out — no judgment.",
+        "blurb": "Comfort zone for a night out. No judgment.",
         "fields": [
             _quest_field(
                 key="budget_level",

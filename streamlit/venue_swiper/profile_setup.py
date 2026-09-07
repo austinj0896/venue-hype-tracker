@@ -60,6 +60,7 @@ PREVIEW_CLOSE_QP = "apres_close"
 SETUP_PARTNER_DIALOG_KEY = "apres_setup_partner_dialog"
 PROFILE_FLASH_KEY = "apres_profile_flash"
 QUEST_ID_KEY = "apres_quest_id"
+PREVIEW_DISMISS_LABEL = "apres_preview_dismiss"
 
 
 def _empty_draft(email: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -156,7 +157,7 @@ def _persist_photos_now(email: str, draft: dict[str, Any]) -> bool:
     """Save gallery immediately (upload / reorder / unlink). Returns True on success."""
     email_n = (email or draft.get("email") or "").strip()
     if not email_n:
-        st.error("Missing email — can’t save photos.")
+        st.error("Missing email. Can’t save photos.")
         return False
     try:
         save_profile_photos(email_n, list(draft.get("photos") or []))
@@ -320,7 +321,7 @@ def _render_photo_picker(email: str, draft: dict[str, Any], *, key_prefix: str) 
                     _persist_photos_now(email, draft)
                     st.rerun()
     else:
-        st.caption("Photo limit reached — remove one to add another.")
+        st.caption("Photo limit reached. Remove one to add another.")
 
 
 def _age_from_dob(dob: Any) -> int | None:
@@ -346,6 +347,19 @@ def _chips_html(items: list[str]) -> str:
 def _dismiss_profile_preview() -> None:
     st.session_state[PREVIEW_OPEN_KEY] = False
     st.session_state[PARTNER_PREVIEW_KEY] = False
+
+
+def _render_preview_dismiss_trigger() -> bool:
+    """Off-screen Streamlit button the overlay JS clicks (avoids full page reload)."""
+    left, _right = st.columns([0.0001, 1])
+    with left:
+        return bool(
+            st.button(
+                PREVIEW_DISMISS_LABEL,
+                key="apres_preview_dismiss",
+                type="secondary",
+            )
+        )
 
 
 def _cleanup_preview_overlay_component() -> None:
@@ -474,7 +488,6 @@ def render_profile_preview_card(
     for photo in photos:
         uris.append(photo_data_uri(photo.get("PHOTO_B64"), photo.get("PHOTO_MIME")) or "")
     uris_json = json.dumps(uris)
-    close_qp = json.dumps(PREVIEW_CLOSE_QP)
     title_js = _js_str(title)
     place_js = _js_str(place)
     status_js = _js_str(status_html)
@@ -489,9 +502,7 @@ def render_profile_preview_card(
 (function() {{
   var URIS = {uris_json};
   var idx = {idx};
-  var CLOSE_QP = {close_qp};
   var doc = window.parent.document;
-  var win = window.parent;
 
   function tearDown() {{
     var old = doc.getElementById("apres-preview-root");
@@ -499,14 +510,21 @@ def render_profile_preview_card(
   }}
 
   function closePreview() {{
-    tearDown();
+    // Prefer clicking the hidden Streamlit dismiss button so session state
+    // survives (full location.href reload was wiping login on Cloud).
     try {{
-      var u = new URL(win.location.href);
-      u.searchParams.set(CLOSE_QP, "1");
-      win.location.href = u.toString();
-    }} catch (e) {{
-      try {{ win.location.reload(); }} catch (e2) {{}}
-    }}
+      var nodes = doc.querySelectorAll("button");
+      for (var i = 0; i < nodes.length; i++) {{
+        var label = (nodes[i].textContent || nodes[i].innerText || "").trim();
+        if (label === {json.dumps(PREVIEW_DISMISS_LABEL)}) {{
+          tearDown();
+          nodes[i].click();
+          return;
+        }}
+      }}
+    }} catch (e) {{}}
+    // Fallback: soft DOM-only close (next widget interaction may reopen until dismiss).
+    tearDown();
   }}
 
   tearDown();
@@ -1462,7 +1480,7 @@ def _render_connection_controls(
             else "Your profile stays private."
         )
     else:
-        st.caption("Coupled profiles stay private — only a linked partner can see yours.")
+        st.caption("Coupled profiles stay private. Only a linked partner can see yours.")
         if not hide_partner_invite:
             partner_email = st.text_input(
                 "Partner email (optional)",
@@ -1536,7 +1554,7 @@ def _open_setup_partner_request_dialog(
 
 def _render_step_connection(draft: dict[str, Any], email: str) -> None:
     st.markdown('<div class="section-label">Connection</div>', unsafe_allow_html=True)
-    st.caption("How you show up — and who you’re with.")
+    st.caption("How you show up, and who you’re with.")
 
     flash = st.session_state.pop(PROFILE_FLASH_KEY, None)
     if flash:
@@ -1564,7 +1582,7 @@ def _render_step_connection(draft: dict[str, Any], email: str) -> None:
             f"Linked with **{partner}**. Your status is **{label}** "
             "(matched to your partner)."
         )
-        st.caption("You can finish setup now — or change status later in Profile.")
+        st.caption("You can finish setup now, or change status later in Profile.")
         back, nxt = _nav(next_label="Finish & start exploring", next_key="profile_step5_linked")
         if back:
             _save_draft(draft)
@@ -1644,7 +1662,7 @@ def _persist_complete(email: str, draft: dict[str, Any]) -> None:
                 else:
                     st.session_state[PROFILE_FLASH_KEY] = (
                         f"Invite saved for {partner_email}. "
-                        "Email delivery comes later — share Après with them for now."
+                        "Email delivery comes later. Share Après with them for now."
                     )
             except Exception as invite_exc:  # noqa: BLE001
                 st.session_state[PROFILE_FLASH_KEY] = (
@@ -1699,45 +1717,46 @@ def _render_quest_hub(email: str, profile: dict[str, Any]) -> None:
     extended = get_extended_profile(email=email, profile=profile)
     done, total, pct = quest_completion(extended)
     fill = max(0, min(100, pct))
-    st.markdown('<div class="section-label">Go deeper</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="quest-hub">'
-        f'<div class="quest-hub-eyebrow">Atelier chapters</div>'
-        f'<div class="quest-hub-title">Go deeper</div>'
-        f'<div class="quest-hub-sub">'
-        f"Optional polish for sharper nights — take them in any order, about a minute each."
-        f"</div>"
-        f'<div class="quest-meter-row">'
-        f'<div class="quest-meter-label">{done} of {total} chapters</div>'
-        f'<div class="quest-meter-pct">{pct}%</div>'
-        f"</div>"
-        f'<div class="quest-meter-track">'
-        f'<div class="quest-meter-fill" style="width:{fill}%;"></div>'
-        f"</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-    for quest in QUESTS:
-        qid = str(quest["id"])
-        complete = quest_has_answers(extended, qid)
-        status = "Done" if complete else "Start"
+    summary = f"{done} of {total} chapters · {pct}%"
+    with st.expander(f"Go deeper · {summary}", expanded=False):
         st.markdown(
-            f'<div class="quest-card">'
-            f'<div class="quest-card-eyebrow">{escape(str(quest.get("eyebrow") or ""))}</div>'
-            f'<div class="quest-card-title">{escape(str(quest.get("title") or ""))}</div>'
-            f'<div class="quest-card-blurb">{escape(str(quest.get("blurb") or ""))}</div>'
+            f'<div class="quest-hub">'
+            f'<div class="quest-hub-eyebrow">Atelier chapters</div>'
+            f'<div class="quest-hub-title">Go deeper</div>'
+            f'<div class="quest-hub-sub">'
+            f"Optional polish for sharper nights. Take them in any order, about a minute each."
+            f"</div>"
+            f'<div class="quest-meter-row">'
+            f'<div class="quest-meter-label">{done} of {total} chapters</div>'
+            f'<div class="quest-meter-pct">{pct}%</div>'
+            f"</div>"
+            f'<div class="quest-meter-track">'
+            f'<div class="quest-meter-fill" style="width:{fill}%;"></div>'
+            f"</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
-        if st.button(
-            status,
-            key=f"quest_open_{qid}",
-            use_container_width=True,
-            type="primary" if not complete else "secondary",
-        ):
-            st.session_state[QUEST_ID_KEY] = qid
-            st.rerun()
+
+        for quest in QUESTS:
+            qid = str(quest["id"])
+            complete = quest_has_answers(extended, qid)
+            status = "Done" if complete else "Start"
+            st.markdown(
+                f'<div class="quest-card">'
+                f'<div class="quest-card-eyebrow">{escape(str(quest.get("eyebrow") or ""))}</div>'
+                f'<div class="quest-card-title">{escape(str(quest.get("title") or ""))}</div>'
+                f'<div class="quest-card-blurb">{escape(str(quest.get("blurb") or ""))}</div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                status,
+                key=f"quest_open_{qid}",
+                use_container_width=True,
+                type="primary" if not complete else "secondary",
+            ):
+                st.session_state[QUEST_ID_KEY] = qid
+                st.rerun()
 
 
 def _render_quest_screen(email: str, quest_id: str, profile: dict[str, Any]) -> None:
@@ -1769,7 +1788,7 @@ def _render_quest_screen(email: str, quest_id: str, profile: dict[str, Any]) -> 
             values = _option_values(options)
             labels = _option_labels(options)
             current = str(extended.get(key) or "").strip()
-            blank = "—"
+            blank = "Select"
             display = [blank] + labels
             if widget_key not in st.session_state:
                 if current and current in values:
@@ -1842,6 +1861,11 @@ def render_profile_settings(email: str, profile: dict[str, Any]) -> None:
 
     st.markdown('<div class="section-label">Your profile</div>', unsafe_allow_html=True)
     st.caption("Photos save as you go. Use preview to see what others would see.")
+
+    # Always present so overlay Close / backdrop can click it without a page reload.
+    if _render_preview_dismiss_trigger():
+        _dismiss_profile_preview()
+        st.rerun()
 
     draft = _get_draft(email, profile)
     _hydrate_draft_photos(email, draft, profile)
@@ -2196,9 +2220,9 @@ def _render_partner_inbox(email: str) -> None:
         kind = str(n.get("KIND") or "")
         payload = n.get("PAYLOAD") or {}
         if kind == "partner_accepted":
-            st.caption(f"Accepted — linked with {payload.get('to_email') or payload.get('from_email')}")
+            st.caption(f"Accepted. Linked with {payload.get('to_email') or payload.get('from_email')}")
         elif kind == "partner_declined":
-            st.caption(f"Declined — {payload.get('to_email') or 'partner'} said not now.")
+            st.caption(f"Declined. {payload.get('to_email') or 'partner'} said not now.")
         elif kind == "partner_request" and not inbound:
             st.caption(f"Request from {payload.get('from_email')}")
 

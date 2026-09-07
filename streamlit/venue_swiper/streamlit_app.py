@@ -2515,7 +2515,7 @@ def render_rated_list(email: str) -> None:
                 eyebrow="My ratings",
                 title="Nothing rated yet",
                 body="Head to <strong>Discover</strong> and save your first score.",
-                action='Start in <span>Discover</span> — one place at a time.',
+                action='Start in <span>Discover</span>. One place at a time.',
             ),
             unsafe_allow_html=True,
         )
@@ -2689,7 +2689,7 @@ def main() -> None:
                 except FuturesTimeout as exc:
                     clear_db_caches()
                     load_error = TimeoutError(
-                        "Timed out talking to the database. Neon may be waking up — try again."
+                        "Timed out talking to the database. Neon may be waking up. Try again."
                     )
                     load_error.__cause__ = exc
     except Exception as exc:  # noqa: BLE001
